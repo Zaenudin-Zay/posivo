@@ -272,7 +272,8 @@ function colorFor(id){ return THUMB_COLORS[Number(id)%THUMB_COLORS.length] || "#
 
 /* ---------- App state ---------- */
 var state = {
-  stage: "loading",       // loading | login | no-outlet | ready
+  stage: "loading",       // loading | login | signup | no-outlet | trial-expired | ready
+  authMode: "login",
   authError: null,
   session: null,
   profile: null,
@@ -319,6 +320,15 @@ async function loadData(){
   var { data: outlet } = await sb.from("outlets").select("*").eq("id", profile.outlet_id).maybeSingle();
   state.outlet = outlet;
 
+  if(outlet && outlet.subscription_status === "trial" && outlet.trial_ends_at){
+    var trialEnd = new Date(outlet.trial_ends_at);
+    if(trialEnd.getTime() < Date.now()){
+      state.stage = "trial-expired"; renderApp(); return;
+    }
+  } else if(outlet && (outlet.subscription_status === "expired" || outlet.subscription_status === "canceled")){
+    state.stage = "trial-expired"; renderApp(); return;
+  }
+
   await refreshAll();
   subscribeRealtime();
   state.stage = "ready";
@@ -355,22 +365,48 @@ function subscribeRealtime(){
     }).subscribe();
 }
 
-/* ---------- Login screen ---------- */
+/* ---------- Login / Signup screen ---------- */
 function renderLogin(){
-  return '<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);">'+
-    '<div class="card" style="width:340px;padding:28px 26px;">'+
-    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:22px;">'+logoMarkSVG(34)+
-    '<div style="font-family:Sora,Inter,sans-serif;font-weight:700;font-size:19px;">POSI<span style="background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;">V</span>O</div></div>'+
-    '<div class="section-title" style="margin-bottom:4px;">Masuk ke akun kamu</div>'+
-    '<div style="font-size:12.5px;color:var(--muted);margin-bottom:18px;">Gunakan akun staf/outlet yang sudah didaftarkan di Supabase.</div>'+
-    '<form id="login-form">'+
-    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Email</label>'+
-    '<input id="login-email" type="email" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="nama@outlet.com"/>'+
-    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Password</label>'+
-    '<input id="login-password" type="password" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="••••••••"/>'+
-    (state.authError ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(state.authError)+'</div>' : '')+
-    '<button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:10px;" '+(state.busy?"disabled":"")+'>'+(state.busy?"Memproses...":"Masuk")+'</button>'+
-    '</form></div></div>';
+  var isSignup = state.authMode === "signup";
+  var head = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:22px;">'+logoMarkSVG(34)+
+    '<div style="font-family:Sora,Inter,sans-serif;font-weight:700;font-size:19px;">POSI<span style="background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;">V</span>O</div></div>';
+
+  var tabs = '<div style="display:flex;gap:6px;background:#F1EDE6;border-radius:10px;padding:4px;margin-bottom:20px;">'+
+    '<button data-auth-mode="login" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;background:'+(isSignup?"transparent":"#fff")+';box-shadow:'+(isSignup?"none":"0 1px 3px rgba(0,0,0,0.08)")+';">Masuk</button>'+
+    '<button data-auth-mode="signup" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;background:'+(isSignup?"#fff":"transparent")+';box-shadow:'+(isSignup?"0 1px 3px rgba(0,0,0,0.08)":"none")+';">Daftar</button>'+
+    '</div>';
+
+  var errBox = state.authError ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(state.authError)+'</div>' : '';
+  var infoBox = state.authInfo ? '<div style="background:var(--good-bg);color:var(--good);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(state.authInfo)+'</div>' : '';
+
+  var body;
+  if(!isSignup){
+    body = '<form id="login-form">'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Email</label>'+
+      '<input id="login-email" type="email" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="nama@outlet.com"/>'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Password</label>'+
+      '<input id="login-password" type="password" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="••••••••"/>'+
+      errBox + infoBox +
+      '<button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:10px;" '+(state.busy?"disabled":"")+'>'+(state.busy?"Memproses...":"Masuk")+'</button>'+
+      '</form>';
+  } else {
+    body = '<div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;">Coba gratis 14 hari, tanpa kartu kredit. Setelah itu Rp49.000/bulan.</div>'+
+      '<form id="signup-form">'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Nama Usaha / Outlet</label>'+
+      '<input id="signup-business" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="Contoh: Kopi Senja"/>'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Nama Kamu</label>'+
+      '<input id="signup-name" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="Nama lengkap"/>'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Email</label>'+
+      '<input id="signup-email" type="email" required style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="nama@outlet.com"/>'+
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Password</label>'+
+      '<input id="signup-password" type="password" required minlength="6" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="Minimal 6 karakter"/>'+
+      errBox + infoBox +
+      '<button type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:10px;" '+(state.busy?"disabled":"")+'>'+(state.busy?"Memproses...":"Mulai Trial 14 Hari")+'</button>'+
+      '</form>';
+  }
+
+  return '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;">'+
+    '<div class="card" style="width:360px;max-width:100%;padding:28px 26px;">'+head+tabs+body+'</div></div>';
 }
 
 async function handleLoginSubmit(e){
@@ -381,6 +417,33 @@ async function handleLoginSubmit(e){
   var { data, error } = await sb.auth.signInWithPassword({ email:email, password:password });
   state.busy = false;
   if(error){ state.authError = error.message; renderApp(); return; }
+  state.session = data.session;
+  await loadData();
+}
+
+async function handleSignupSubmit(e){
+  e.preventDefault();
+  var business = document.getElementById("signup-business").value.trim();
+  var fullName = document.getElementById("signup-name").value.trim();
+  var email = document.getElementById("signup-email").value.trim();
+  var password = document.getElementById("signup-password").value;
+
+  state.busy = true; state.authError = null; state.authInfo = null; renderApp();
+  var { data, error } = await sb.auth.signUp({
+    email: email, password: password,
+    options: { data: { business_name: business, full_name: fullName } }
+  });
+  state.busy = false;
+
+  if(error){ state.authError = error.message; renderApp(); return; }
+
+  if(!data.session){
+    // proyek mewajibkan konfirmasi email
+    state.authInfo = "Akun dibuat. Cek email kamu untuk konfirmasi, lalu masuk lewat tab Masuk.";
+    state.authMode = "login";
+    renderApp();
+    return;
+  }
   state.session = data.session;
   await loadData();
 }
@@ -427,6 +490,14 @@ var META = {
   produk: {title:"Produk", sub:"Kelola katalog dan stok produk"}
 };
 
+function trialBadge(){
+  if(!state.outlet || state.outlet.subscription_status !== "trial" || !state.outlet.trial_ends_at) return "";
+  var msLeft = new Date(state.outlet.trial_ends_at).getTime() - Date.now();
+  var daysLeft = Math.max(0, Math.ceil(msLeft/(1000*60*60*24)));
+  var urgent = daysLeft <= 3;
+  return '<div class="pill" style="background:'+(urgent?"var(--bad-bg)":"var(--warn-bg)")+';color:'+(urgent?"var(--red)":"var(--warn)")+';font-weight:700;">Trial: '+daysLeft+' hari lagi</div>';
+}
+
 function renderTopbar(){
   var m = META[state.view];
   var now = new Date();
@@ -434,7 +505,7 @@ function renderTopbar(){
   var timeStr = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
   var rightBtn = state.view==="kasir" ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
   return '<div class="topbar"><div><div class="page-title">'+m.title+'</div><div class="page-sub">'+m.sub+'</div></div>'+
-    '<div class="topbar-right">'+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
+    '<div class="topbar-right">'+trialBadge()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
 }
 
 /* ---------- Dashboard ---------- */
@@ -805,6 +876,8 @@ function renderApp(){
     root.innerHTML = renderLogin();
     var f = document.getElementById("login-form");
     if(f) f.addEventListener("submit", handleLoginSubmit);
+    var sf = document.getElementById("signup-form");
+    if(sf) sf.addEventListener("submit", handleSignupSubmit);
     return;
   }
   if(state.stage==="no-outlet"){
@@ -814,6 +887,16 @@ function renderApp(){
       '<div style="font-size:13px;color:var(--muted);margin-bottom:16px;">Akun kamu berhasil login, tapi belum ditautkan ke data outlet manapun di tabel <code>profiles</code>. Hubungkan dulu lewat Supabase SQL Editor, lalu klik Coba Lagi.</div>'+
       (state.debugInfo ? '<pre style="text-align:left;font-size:10.5px;background:#F6F3EF;border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:14px;white-space:pre-wrap;word-break:break-all;color:var(--muted);">'+esc(state.debugInfo)+'</pre>' : '')+
       '<button class="btn btn-primary" data-retry style="width:100%;justify-content:center;margin-bottom:10px;">Coba Lagi</button>'+
+      '<button class="btn btn-outline" data-logout style="width:100%;justify-content:center;">Keluar</button></div></div>';
+    return;
+  }
+  if(state.stage==="trial-expired"){
+    root.innerHTML = '<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;">'+
+      '<div class="card" style="max-width:420px;padding:30px;text-align:center;">'+
+      '<div style="width:52px;height:52px;border-radius:14px;background:var(--grad);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">'+ICONS.table(24)+'</div>'+
+      '<div class="section-title" style="margin-bottom:8px;font-size:17px;">Masa trial kamu sudah berakhir</div>'+
+      '<div style="font-size:13px;color:var(--muted);margin-bottom:20px;">Trial 14 hari untuk <b style="color:var(--ink);">'+esc((state.outlet&&state.outlet.name)||"outlet kamu")+'</b> sudah habis. Lanjutkan berlangganan Rp49.000/bulan untuk terus pakai Posivo.</div>'+
+      '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;margin-bottom:10px;" onclick="alert(\'Halaman pembayaran langganan segera hadir. Hubungi kami untuk aktivasi manual sementara.\')">Berlangganan Sekarang</button>'+
       '<button class="btn btn-outline" data-logout style="width:100%;justify-content:center;">Keluar</button></div></div>';
     return;
   }
@@ -843,6 +926,9 @@ root.addEventListener("click", function(e){
 
   var retryBtn = e.target.closest("[data-retry]");
   if(retryBtn){ loadData(); return; }
+
+  var authModeBtn = e.target.closest("[data-auth-mode]");
+  if(authModeBtn){ state.authMode = authModeBtn.getAttribute("data-auth-mode"); state.authError = null; state.authInfo = null; renderApp(); return; }
 
   var navBtn = e.target.closest("[data-nav]");
   if(navBtn){ state.view = navBtn.getAttribute("data-nav"); renderApp(); return; }
