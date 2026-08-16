@@ -734,7 +734,7 @@ function renderSidebar(){
   var html = '<aside class="sidebar'+(state.sidebarPinned?" pinned":"")+'">';
   html += '<div class="nav-highlight" id="navHighlight"></div>';
   html += '<button class="sidebar-toggle" data-sidebar-toggle title="'+(state.sidebarPinned?"Kecilkan sidebar":"Buka sidebar")+'">'+svgIcon('<path d="M9 6l6 6-6 6"/>',15)+'</button>';
-  html += '<div class="brand-row">'+logoMarkSVG(38)+'<div class="sidebar-label"><div class="brand-word">POSI<span class="accent">V</span>O</div><div class="brand-tagline">All in one POS &amp; Business Platform</div></div></div>';
+  html += '<div class="brand-row">'+logoMarkSVG(38)+'<div class="sidebar-label"><img src="logo-wordmark.png" alt="Posivo — All-in-One POS &amp; Business Platform" style="height:34px;width:auto;display:block;"></div></div>';
   html += '<div class="nav-section-label sidebar-label">Operasional</div>';
   items.forEach(function(it){
     html += '<button class="nav-item'+(state.view===it.key?" active":"")+'" data-nav="'+it.key+'" title="'+it.label+'">'+ICONS[it.icon](17)+'<span class="sidebar-label">'+it.label+'</span></button>';
