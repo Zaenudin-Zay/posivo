@@ -132,6 +132,9 @@
   .content-pad{padding:24px 26px 40px;}
 
   .card{background:var(--surface); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow);}
+  .auth-card{background-image:url('login-bg.png'); background-size:cover; background-position:center; border:1px solid rgba(255,255,255,0.08); border-radius:16px; box-shadow:var(--shadow); color:#F5F1EA;}
+  .auth-card input{background:#fff; color:var(--ink);}
+  .auth-card input::placeholder{color:#9a948b;}
   .stat-card{padding:18px 18px 16px;}
   .stat-label{font-size:12.5px; color:var(--muted); font-weight:500;}
   .stat-value{font-family:'JetBrains Mono',monospace; font-size:23px; font-weight:700; margin-top:8px; letter-spacing:-0.01em;}
@@ -638,11 +641,11 @@ function subscribeRealtime(){
 function renderLogin(){
   var isSignup = state.authMode === "signup";
   var head = '<a href="index.html" style="display:flex;align-items:center;gap:10px;margin-bottom:22px;text-decoration:none;">'+logoMarkSVG(34)+
-    '<div style="font-family:Sora,Inter,sans-serif;font-weight:700;font-size:19px;color:var(--ink);">POSI<span style="background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent;">V</span>O</div></a>';
+    '<img src="logo-wordmark.png" alt="Posivo" style="height:30px;width:auto;display:block;"></a>';
 
-  var tabs = '<div style="display:flex;gap:6px;background:#F1EDE6;border-radius:10px;padding:4px;margin-bottom:20px;">'+
-    '<button data-auth-mode="login" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;background:'+(isSignup?"transparent":"#fff")+';box-shadow:'+(isSignup?"none":"0 1px 3px rgba(0,0,0,0.08)")+';">Masuk</button>'+
-    '<button data-auth-mode="signup" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;background:'+(isSignup?"#fff":"transparent")+';box-shadow:'+(isSignup?"0 1px 3px rgba(0,0,0,0.08)":"none")+';">Daftar</button>'+
+  var tabs = '<div style="display:flex;gap:6px;background:rgba(255,255,255,0.08);border-radius:10px;padding:4px;margin-bottom:20px;">'+
+    '<button data-auth-mode="login" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;color:'+(isSignup?"#F5F1EA":"#1a1a1a")+';background:'+(isSignup?"transparent":"#fff")+';box-shadow:'+(isSignup?"none":"0 1px 3px rgba(0,0,0,0.08)")+';">Masuk</button>'+
+    '<button data-auth-mode="signup" style="flex:1;border:none;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;color:'+(isSignup?"#1a1a1a":"#F5F1EA")+';background:'+(isSignup?"#fff":"transparent")+';box-shadow:'+(isSignup?"0 1px 3px rgba(0,0,0,0.08)":"none")+';">Daftar</button>'+
     '</div>';
 
   var errBox = state.authError ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(state.authError)+'</div>' : '';
@@ -675,7 +678,7 @@ function renderLogin(){
   }
 
   return '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;">'+
-    '<div class="card" style="width:360px;max-width:100%;padding:28px 26px;">'+head+tabs+body+'</div></div>';
+    '<div class="auth-card" style="width:360px;max-width:100%;padding:28px 26px;">'+head+tabs+body+'</div></div>';
 }
 
 async function handleLoginSubmit(e){
