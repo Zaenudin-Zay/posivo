@@ -285,7 +285,8 @@ var ICONS = {
   x: function(s){ return svgIcon('<path d="M18 6L6 18M6 6l12 12"/>', s); },
   trash: function(s){ return svgIcon('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/>', s); },
   edit: function(s){ return svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>', s); },
-  logout: function(s){ return svgIcon('<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>', s); }
+  logout: function(s){ return svgIcon('<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>', s); },
+  history: function(s){ return svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>', s); }
 };
 
 /* ---------- Static reference data ---------- */
@@ -299,6 +300,9 @@ var CYCLE = ["kosong","terisi","kotor"];
 var THUMB_COLORS = ["#8B5E34","#3B2A21","#6F4E37","#5C8A3A","#6B3A2A","#7A5C9E","#C4501C","#D68A2C","#B5432C","#D3A02C","#8A5A2E","#C98A2E","#A8781E","#2E7BA6"];
 
 function fmtRp(n){ return "Rp " + Number(n||0).toLocaleString("id-ID"); }
+function pad2(n){ return String(n).length<2 ? "0"+n : String(n); }
+function localISODate(d){ d=d||new Date(); return d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate()); }
+function localISOMonth(d){ d=d||new Date(); return d.getFullYear()+"-"+pad2(d.getMonth()+1); }
 function initials(name){ return String(name||"?").split(" ").map(function(w){return w[0];}).slice(0,2).join(""); }
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function colorFor(id){ return THUMB_COLORS[Number(id)%THUMB_COLORS.length] || "#8B5E34"; }
@@ -545,6 +549,10 @@ var state = {
   kasir: { cat: "Semua", cart: [], payMethod: "QRIS", selectedMeja: "" },
   produk: { query: "", cat: "Semua", cursor: 0 },
   meja: { activeModal: null },
+  riwayat: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
+  todaySales: 0,
+  todayTransCount: 0,
+  recentOrders: [],
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
   receiptEditor: null,
@@ -618,6 +626,19 @@ async function refreshAll(){
   state.tables = tables || [];
   state.categories = categories || [];
   if(!state.kasir.selectedMeja && state.tables[0]) state.kasir.selectedMeja = state.tables[0].id;
+  await refreshDashboardStats();
+}
+
+async function refreshDashboardStats(){
+  var outletId = state.profile.outlet_id;
+  var todayStart = new Date(); todayStart.setHours(0,0,0,0);
+  var [{ data: todayOrders }, { data: recent }] = await Promise.all([
+    sb.from("orders").select("total,status").eq("outlet_id", outletId).eq("status","selesai").gte("created_at", todayStart.toISOString()),
+    sb.from("orders").select("id,total,status,created_at,payments(method)").eq("outlet_id", outletId).order("created_at",{ascending:false}).limit(5)
+  ]);
+  state.todaySales = (todayOrders||[]).reduce(function(s,o){ return s+Number(o.total||0); }, 0);
+  state.todayTransCount = (todayOrders||[]).length;
+  state.recentOrders = recent || [];
 }
 
 function subscribeRealtime(){
@@ -725,6 +746,7 @@ function renderSidebar(){
   var items = [
     {key:"dashboard", label:"Dashboard", icon:"dashboard"},
     {key:"kasir", label:"Kasir / Transaksi", icon:"cashier"},
+    {key:"riwayat", label:"Riwayat Transaksi", icon:"history"},
     {key:"meja", label:"Meja", icon:"table"},
     {key:"produk", label:"Produk", icon:"box"},
     {key:"pengaturan", label:"Pengaturan", icon:"settings"}
@@ -762,6 +784,7 @@ function renderSidebar(){
 var META = {
   dashboard: {title:"Dashboard", sub:"Ringkasan performa outlet hari ini"},
   kasir: {title:"Kasir", sub:"Buat transaksi baru dengan cepat"},
+  riwayat: {title:"Riwayat Transaksi", sub:"Lihat & filter seluruh transaksi berdasarkan tanggal, bulan, atau tahun"},
   meja: {title:"Manajemen Meja", sub:"Pantau status seluruh meja secara real-time"},
   produk: {title:"Produk", sub:"Kelola katalog dan stok produk"},
   pengaturan: {title:"Pengaturan", sub:"Koneksi printer & preferensi outlet"}
@@ -780,7 +803,7 @@ function renderTopbar(){
   var now = new Date();
   var dateStr = now.toLocaleDateString("id-ID", {weekday:"long", day:"numeric", month:"long"});
   var timeStr = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
-  var rightBtn = (state.view==="kasir"||state.view==="pengaturan") ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
+  var rightBtn = (state.view==="kasir"||state.view==="pengaturan"||state.view==="riwayat") ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
   return '<div class="topbar"><div><div class="page-title">'+m.title+'</div><div class="page-sub">'+m.sub+'</div></div>'+
     '<div class="topbar-right">'+trialBadge()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
 }
@@ -840,8 +863,8 @@ function statCard(label, value, delta, up, iconKey, iconBg, iconColor){
 function renderDashboard(){
   var mejaAktif = state.tables.filter(function(t){ return t.status!=="kosong"; }).length;
   var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">';
-  html += statCard("Penjualan Hari Ini","Rp 0","Belum ada data",true,"trend","#FBEDEC","#E63946");
-  html += statCard("Transaksi","0","Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
+  html += statCard("Penjualan Hari Ini", fmtRp(state.todaySales), state.todayTransCount+" transaksi hari ini", true, "trend","#FBEDEC","#E63946");
+  html += statCard("Transaksi", String(state.todayTransCount), state.todayTransCount>0?"hari ini":"Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
   html += statCard("Produk Aktif", String(state.products.length), state.products.length+" item terdaftar", true, "box","#EFECE6","#0D0D0D");
   html += statCard("Meja Aktif", mejaAktif+" / "+state.tables.length, "real-time dari Supabase", true, "table","#EFECE6","#0D0D0D");
   html += '</div>';
@@ -852,8 +875,28 @@ function renderDashboard(){
   html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:12px;">Metode Pembayaran</div>'+donutSVG()+'<div style="font-size:11px;color:var(--muted);margin-top:10px;">Data contoh.</div></div>';
   html += '</div>';
 
-  html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:6px;">Transaksi Terbaru</div>'+
-    '<div style="font-size:12.5px;color:var(--muted);padding:14px 0;">Riwayat transaksi asli akan tampil di sini setelah kamu mulai membayar order lewat halaman Kasir.</div></div>';
+  var recentHtml;
+  if(state.recentOrders.length===0){
+    recentHtml = '<div style="font-size:12.5px;color:var(--muted);padding:14px 0;">Belum ada transaksi. Riwayat akan tampil di sini setelah kamu mulai membayar order lewat halaman Kasir.</div>';
+  } else {
+    recentHtml = '<table style="width:100%;border-collapse:collapse;">'+
+      '<thead><tr style="text-align:left;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;">'+
+      '<th style="padding:8px 0;">Waktu</th><th style="padding:8px;">Metode</th><th style="padding:8px;">Status</th><th style="padding:8px 0;text-align:right;">Total</th></tr></thead><tbody>'+
+      state.recentOrders.map(function(o){
+        var d = new Date(o.created_at);
+        var waktu = d.toLocaleDateString("id-ID",{day:"numeric",month:"short"})+" "+d.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+        var metode = (o.payments && o.payments[0]) ? o.payments[0].method : "-";
+        return '<tr style="border-top:1px solid var(--border);font-size:12.5px;">'+
+          '<td style="padding:9px 0;">'+esc(waktu)+'</td>'+
+          '<td style="padding:9px;text-transform:capitalize;">'+esc(metode)+'</td>'+
+          '<td style="padding:9px;"><span class="pill '+(o.status==="selesai"?"pill-good":"pill-neutral")+'">'+esc(o.status)+'</span></td>'+
+          '<td style="padding:9px 0;text-align:right;font-weight:600;">'+fmtRp(o.total)+'</td></tr>';
+      }).join("")+
+      '</tbody></table>';
+  }
+  html += '<div class="card" style="padding:18px 20px;"><div class="row-between" style="margin-bottom:6px;"><div class="section-title">Transaksi Terbaru</div>'+
+    '<button data-nav="riwayat" style="border:none;background:none;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;">Lihat semua &rarr;</button></div>'+
+    recentHtml+'</div>';
   return html;
 }
 
@@ -1016,6 +1059,7 @@ async function handlePay(){
 
     state.toast = "Pembayaran "+fmtRp(total)+" via "+k.payMethod+" berhasil";
     k.cart = [];
+    refreshDashboardStats().then(renderApp);
 
     if(state.printer.connected){
       try{
@@ -1031,6 +1075,106 @@ async function handlePay(){
   state.busy = false;
   renderApp();
   setTimeout(function(){ state.toast = null; renderApp(); }, 3200);
+}
+
+/* ---------- Riwayat Transaksi ---------- */
+async function loadRiwayat(){
+  if(!state.profile) return;
+  var r = state.riwayat;
+  r.loading = true; r.error = null; renderApp();
+
+  var start, end;
+  if(r.filterType === "harian"){
+    start = new Date(r.date+"T00:00:00");
+    end = new Date(start); end.setDate(end.getDate()+1);
+  } else if(r.filterType === "bulanan"){
+    var parts = r.month.split("-");
+    start = new Date(Number(parts[0]), Number(parts[1])-1, 1);
+    end = new Date(Number(parts[0]), Number(parts[1]), 1);
+  } else {
+    start = new Date(Number(r.year), 0, 1);
+    end = new Date(Number(r.year)+1, 0, 1);
+  }
+
+  var { data, error } = await sb.from("orders")
+    .select("id,total,subtotal,tax,status,created_at,table_id,tables(label),order_items(qty,price,products(name)),payments(method,amount)")
+    .eq("outlet_id", state.profile.outlet_id)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending:false });
+
+  r.loading = false;
+  if(error){ r.error = error.message; renderApp(); return; }
+  r.orders = data || [];
+  r.loaded = true;
+  renderApp();
+}
+
+function renderRiwayat(){
+  var r = state.riwayat;
+
+  var filterBtns = ["harian","bulanan","tahunan"].map(function(f){
+    var lbl = f==="harian" ? "Harian" : (f==="bulanan" ? "Bulanan" : "Tahunan");
+    var active = r.filterType === f;
+    return '<button data-riwayat-filter="'+f+'" style="border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;background:'+(active?"#fff":"transparent")+';box-shadow:'+(active?"0 1px 3px rgba(0,0,0,0.08)":"none")+';color:'+(active?"var(--ink)":"var(--muted)")+';">'+lbl+'</button>';
+  }).join("");
+
+  var curYear = new Date().getFullYear();
+  var yearOptions = "";
+  for(var y=curYear; y>=curYear-4; y--){ yearOptions += '<option value="'+y+'"'+(Number(r.year)===y?" selected":"")+'>'+y+'</option>'; }
+
+  var filterInput;
+  if(r.filterType === "harian"){
+    filterInput = '<input type="date" id="riwayat-date-input" value="'+esc(r.date)+'" style="border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12.5px;"/>';
+  } else if(r.filterType === "bulanan"){
+    filterInput = '<input type="month" id="riwayat-month-input" value="'+esc(r.month)+'" style="border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12.5px;"/>';
+  } else {
+    filterInput = '<select id="riwayat-year-input" style="border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12.5px;">'+yearOptions+'</select>';
+  }
+
+  var html = '<div class="card" style="padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'+
+    '<div style="display:flex;gap:6px;background:#F1EDE6;border-radius:10px;padding:4px;">'+filterBtns+'</div>'+
+    filterInput+
+    '</div>';
+
+  var validOrders = r.orders.filter(function(o){ return o.status === "selesai"; });
+  var totalSales = validOrders.reduce(function(s,o){ return s+Number(o.total||0); }, 0);
+
+  html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:16px;">';
+  html += statCard("Total Penjualan", fmtRp(totalSales), validOrders.length+" transaksi selesai", true, "trend","#FBEDEC","#E63946");
+  html += statCard("Jumlah Transaksi", String(r.orders.length), "pada periode ini", true, "cashier","#FFF1E0","#FF8A00");
+  html += '</div>';
+
+  html += '<div class="card" style="padding:0;overflow:hidden;">';
+  if(r.loading){
+    html += '<div style="padding:40px;text-align:center;color:var(--muted);">Memuat transaksi...</div>';
+  } else if(r.error){
+    html += '<div style="padding:40px;text-align:center;color:var(--red);">'+esc(r.error)+'</div>';
+  } else if(r.orders.length === 0){
+    html += '<div style="padding:40px;text-align:center;color:var(--muted);">Belum ada transaksi pada periode ini.</div>';
+  } else {
+    html += '<table style="width:100%;border-collapse:collapse;">'+
+      '<thead><tr style="text-align:left;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;">'+
+      '<th style="padding:12px 18px;">Waktu</th><th style="padding:12px;">Meja</th><th style="padding:12px;">Item</th><th style="padding:12px;">Metode</th><th style="padding:12px;">Status</th><th style="padding:12px 18px;text-align:right;">Total</th></tr></thead><tbody>'+
+      r.orders.map(function(o){
+        var d = new Date(o.created_at);
+        var waktu = d.toLocaleDateString("id-ID",{day:"numeric",month:"short",year:"numeric"})+" "+d.toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"});
+        var meja = (o.tables && o.tables.label) ? o.tables.label : "-";
+        var itemsArr = (o.order_items||[]).map(function(it){ return it.qty+"x "+(it.products ? it.products.name : "Produk"); });
+        var itemsSummary = itemsArr.length<=2 ? itemsArr.join(", ") : itemsArr.slice(0,2).join(", ")+" +"+(itemsArr.length-2)+" lainnya";
+        var metode = (o.payments && o.payments[0]) ? o.payments[0].method : "-";
+        return '<tr style="border-top:1px solid var(--border);font-size:12.5px;">'+
+          '<td style="padding:11px 18px;white-space:nowrap;">'+esc(waktu)+'</td>'+
+          '<td style="padding:11px;">'+esc(meja)+'</td>'+
+          '<td style="padding:11px;color:var(--muted);">'+esc(itemsSummary)+'</td>'+
+          '<td style="padding:11px;text-transform:capitalize;">'+esc(metode)+'</td>'+
+          '<td style="padding:11px;"><span class="pill '+(o.status==="selesai"?"pill-good":"pill-neutral")+'">'+esc(o.status)+'</span></td>'+
+          '<td style="padding:11px 18px;text-align:right;font-weight:600;">'+fmtRp(o.total)+'</td></tr>';
+      }).join("")+
+      '</tbody></table>';
+  }
+  html += '</div>';
+  return html;
 }
 
 /* ---------- Meja ---------- */
@@ -1590,6 +1734,7 @@ function renderApp(){
   var content;
   if(state.view==="dashboard") content = renderDashboard();
   else if(state.view==="kasir") content = renderKasir();
+  else if(state.view==="riwayat") content = renderRiwayat();
   else if(state.view==="meja") content = renderMeja();
   else if(state.view==="produk") content = renderProduk();
   else if(state.view==="pengaturan") content = renderPengaturan();
@@ -1651,7 +1796,20 @@ root.addEventListener("click", function(e){
   if(authModeBtn){ state.authMode = authModeBtn.getAttribute("data-auth-mode"); state.authError = null; state.authInfo = null; renderApp(); return; }
 
   var navBtn = e.target.closest("[data-nav]");
-  if(navBtn){ state.view = navBtn.getAttribute("data-nav"); renderApp(); return; }
+  if(navBtn){
+    state.view = navBtn.getAttribute("data-nav");
+    renderApp();
+    if(state.view==="riwayat") loadRiwayat();
+    return;
+  }
+
+  var riwayatFilterBtn = e.target.closest("[data-riwayat-filter]");
+  if(riwayatFilterBtn){
+    state.riwayat.filterType = riwayatFilterBtn.getAttribute("data-riwayat-filter");
+    renderApp();
+    loadRiwayat();
+    return;
+  }
 
   var catTab = e.target.closest("[data-kasir-cat]");
   if(catTab){ state.kasir.cat = catTab.getAttribute("data-kasir-cat"); renderApp(); return; }
@@ -1731,6 +1889,9 @@ root.addEventListener("change", function(e){
   if(e.target.id === "produk-modal-file"){ handleProductFileChange(e); }
   if(e.target.id === "receipt-logo-file"){ handleReceiptLogoFileChange(e); }
   if(e.target.id === "profile-picture-file"){ handleProfilePictureFileChange(e); }
+  if(e.target.id === "riwayat-date-input"){ state.riwayat.date = e.target.value; loadRiwayat(); }
+  if(e.target.id === "riwayat-month-input"){ state.riwayat.month = e.target.value; loadRiwayat(); }
+  if(e.target.id === "riwayat-year-input"){ state.riwayat.year = Number(e.target.value); loadRiwayat(); }
 });
 
 root.addEventListener("input", function(e){
