@@ -81,29 +81,28 @@
     display:flex; align-items:center; gap:11px;
     padding:10px 12px; border-radius:10px; border:none; background:transparent;
     color:#B4AEA6; font-size:13.5px; font-weight:500; width:100%; text-align:left;
-    position:relative; isolation:isolate; transition:background .15s, color .15s, justify-content .2s, padding .2s;
+    position:relative; z-index:1; transition:background .15s, color .15s, justify-content .2s, padding .2s;
   }
   .sidebar:not(:hover):not(.pinned) .nav-item{justify-content:center; padding:10px 0; gap:0;}
   .nav-item svg{flex-shrink:0; opacity:0.85;}
-  .nav-item:hover{background:#1B1A18; color:var(--white);}
+  .nav-item:hover{color:var(--white);}
   .nav-item.active{background:#1B1A18; color:var(--white);}
   .nav-item.active::before{
     content:''; position:absolute; left:-16px; top:8px; bottom:8px; width:3px;
     border-radius:0 4px 4px 0; background:var(--grad);
   }
-  .nav-item::after{
-    content:''; position:absolute; inset:0; border-radius:10px; padding:1.5px; z-index:-1;
-    background:conic-gradient(from 0deg, var(--red), var(--orange), var(--red) 55%, var(--orange) 80%, var(--red));
-    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite:xor; mask-composite:exclude;
-    opacity:0; transition:opacity .25s ease;
-    animation:navGlowSpin 2.4s linear infinite; animation-play-state:paused;
-    pointer-events:none;
+  /* Single highlight bar that glides smoothly between menu items on hover (see JS) */
+  .nav-highlight{
+    position:absolute; left:0; top:0; width:0; height:0; z-index:0; border-radius:10px;
+    pointer-events:none; opacity:0; border:1.5px solid transparent;
+    background:var(--ink-soft) padding-box, linear-gradient(135deg, var(--red), var(--orange)) border-box;
+    box-shadow:0 0 14px -3px rgba(230,57,70,0.5);
+    transition:top .22s cubic-bezier(.4,0,.2,1), left .22s cubic-bezier(.4,0,.2,1),
+               width .22s cubic-bezier(.4,0,.2,1), height .22s cubic-bezier(.4,0,.2,1),
+               opacity .16s ease;
   }
-  .nav-item:hover::after{opacity:1; animation-play-state:running;}
-  .nav-item:hover{box-shadow:0 0 16px -4px rgba(230,57,70,0.45);}
-  @keyframes navGlowSpin{ to{ transform:rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce){ .nav-item::after{animation:none; transform:none;} }
+  .nav-highlight.is-visible{opacity:1;}
+  @media (prefers-reduced-motion: reduce){ .nav-highlight{transition:opacity .16s ease;} }
   .sidebar-bottom{margin-top:auto; padding-top:14px; border-top:1px solid #221F1C;}
   .outlet-pill{
     display:flex; align-items:center; gap:9px; padding:9px 10px; border-radius:11px;
@@ -515,6 +514,7 @@ function renderSidebar(){
     {key:"pengaturan", label:"Pengaturan", icon:"settings"}
   ];
   var html = '<aside class="sidebar'+(state.sidebarPinned?" pinned":"")+'">';
+  html += '<div class="nav-highlight" id="navHighlight"></div>';
   html += '<button class="sidebar-toggle" data-sidebar-toggle title="'+(state.sidebarPinned?"Kecilkan sidebar":"Buka sidebar")+'">'+svgIcon('<path d="M9 6l6 6-6 6"/>',15)+'</button>';
   html += '<div class="brand-row">'+logoMarkSVG(38)+'<div class="sidebar-label"><div class="brand-word">POSI<span class="accent">V</span>O</div><div class="brand-tagline">All in one POS &amp; Business Platform</div></div></div>';
   html += '<div class="nav-section-label sidebar-label">Operasional</div>';
@@ -1080,6 +1080,30 @@ function renderApp(){
 }
 
 /* ---------- Event delegation ---------- */
+/* Sliding nav highlight: glides smoothly to whichever menu item is hovered */
+root.addEventListener("mouseover", function(e){
+  var item = e.target.closest(".sidebar .nav-item");
+  if(!item) return;
+  var sidebarEl = item.closest(".sidebar");
+  var hl = sidebarEl.querySelector("#navHighlight");
+  if(!hl) return;
+  var sRect = sidebarEl.getBoundingClientRect();
+  var iRect = item.getBoundingClientRect();
+  hl.style.top = (iRect.top - sRect.top) + "px";
+  hl.style.left = (iRect.left - sRect.left) + "px";
+  hl.style.width = iRect.width + "px";
+  hl.style.height = iRect.height + "px";
+  hl.classList.add("is-visible");
+});
+root.addEventListener("mouseout", function(e){
+  var item = e.target.closest(".sidebar .nav-item");
+  if(!item) return;
+  var toItem = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest(".sidebar .nav-item") : null;
+  if(toItem) return; // moving straight to another nav-item — let its mouseover keep the bar visible/sliding
+  var hl = item.closest(".sidebar").querySelector("#navHighlight");
+  if(hl) hl.classList.remove("is-visible");
+});
+
 root.addEventListener("click", function(e){
   var sidebarToggle = e.target.closest("[data-sidebar-toggle]");
   if(sidebarToggle){ state.sidebarPinned = !state.sidebarPinned; renderApp(); return; }
