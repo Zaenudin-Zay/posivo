@@ -545,6 +545,7 @@ var state = {
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
   receiptEditor: null,
+  profileEditor: null,
   lastReceipt: null,
   toast: null,
   busy: false,
@@ -744,7 +745,9 @@ function renderSidebar(){
   });
   var outletName = (state.outlet && state.outlet.name) || "Outlet";
   html += '<div class="sidebar-bottom"><div class="outlet-pill">'+
-    '<div class="outlet-avatar">'+initials(outletName)+'</div>'+
+    (state.outlet && state.outlet.profile_picture_url
+      ? '<img src="'+esc(state.outlet.profile_picture_url)+'" class="outlet-avatar" style="object-fit:cover;"/>'
+      : '<div class="outlet-avatar">'+initials(outletName)+'</div>')+
     '<div class="sidebar-label" style="min-width:0;flex:1;"><div style="color:#fff;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(outletName)+'</div>'+
     '<div style="color:#8A8580;font-size:11px;">'+esc((state.profile && state.profile.role) || "")+'</div></div>'+
     '<button data-logout title="Keluar" style="border:none;background:none;color:#8A8580;flex-shrink:0;">'+ICONS.logout(15)+'</button>'+
@@ -1264,7 +1267,121 @@ async function handleSaveProduct(){
   }
 }
 
-/* ---------- Pengaturan ---------- */
+/* ---------- Pengaturan: Profil Toko ---------- */
+function ensureProfileEditorInit(){
+  if(state.profileEditor) return;
+  var o = state.outlet || {};
+  state.profileEditor = {
+    name: o.name || "",
+    address: o.address || "",
+    phone: o.phone || "",
+    email: o.email || "",
+    pictureFile: null,
+    picturePreviewUrl: "",
+    existingPictureUrl: o.profile_picture_url || "",
+    busy: false,
+    error: null,
+    saved: false
+  };
+}
+
+function handleProfilePictureFileChange(e){
+  var file = e.target.files && e.target.files[0];
+  if(!file) return;
+  state.profileEditor.pictureFile = file;
+  state.profileEditor.picturePreviewUrl = URL.createObjectURL(file);
+  renderApp();
+}
+
+async function handleSaveProfileSettings(){
+  var pe = state.profileEditor;
+  pe.name = document.getElementById("profile-name").value.trim();
+  pe.address = document.getElementById("profile-address").value;
+  pe.phone = document.getElementById("profile-phone").value.trim();
+  pe.email = document.getElementById("profile-email").value.trim();
+
+  if(!pe.name){
+    pe.error = "Nama toko wajib diisi.";
+    renderApp(); return;
+  }
+
+  pe.busy = true; pe.error = null; pe.saved = false; renderApp();
+
+  try{
+    var pictureUrl = pe.existingPictureUrl || null;
+    if(pe.pictureFile){
+      var outletId = state.profile.outlet_id;
+      var safeName = pe.pictureFile.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      var filePath = outletId + "/profile-" + Date.now() + "-" + safeName;
+      var { error: upErr } = await sb.storage.from("product-images").upload(filePath, pe.pictureFile, { upsert:true });
+      if(upErr) throw upErr;
+      var pub = sb.storage.from("product-images").getPublicUrl(filePath);
+      pictureUrl = pub.data.publicUrl;
+    }
+
+    var { error: updErr } = await sb.from("outlets").update({
+      name: pe.name,
+      address: pe.address,
+      phone: pe.phone,
+      email: pe.email,
+      profile_picture_url: pictureUrl
+    }).eq("id", state.profile.outlet_id);
+    if(updErr) throw updErr;
+
+    state.outlet.name = pe.name;
+    state.outlet.address = pe.address;
+    state.outlet.phone = pe.phone;
+    state.outlet.email = pe.email;
+    state.outlet.profile_picture_url = pictureUrl;
+    pe.existingPictureUrl = pictureUrl || "";
+    pe.pictureFile = null;
+    pe.picturePreviewUrl = "";
+    pe.saved = true;
+  }catch(err){
+    pe.error = "Gagal menyimpan: " + (err && err.message ? err.message : err);
+  }
+  pe.busy = false;
+  renderApp();
+  if(!pe.error){ setTimeout(function(){ if(state.profileEditor){ state.profileEditor.saved = false; renderApp(); } }, 2500); }
+}
+
+function renderProfilCard(){
+  var pe = state.profileEditor;
+  var pic = pe.picturePreviewUrl || pe.existingPictureUrl;
+  var avatarHtml = pic
+    ? '<img src="'+esc(pic)+'" style="width:64px;height:64px;border-radius:14px;object-fit:cover;flex-shrink:0;"/>'
+    : '<div style="width:64px;height:64px;border-radius:14px;background:var(--grad);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:20px;flex-shrink:0;">'+initials(pe.name || "Outlet")+'</div>';
+
+  var html = '<div class="card" style="padding:22px;max-width:640px;margin-bottom:20px;">';
+  html += '<div class="section-title" style="margin-bottom:4px;">Profil Toko</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:18px;">Informasi dasar outlet kamu — tampil di sidebar dan digunakan di berbagai bagian aplikasi.</div>';
+
+  html += '<div style="display:flex;align-items:center;gap:16px;margin-bottom:20px;">'+avatarHtml+
+    '<div style="flex:1;"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">Foto Profil</label>'+
+    '<input id="profile-picture-file" type="file" accept="image/*" style="width:100%;font-size:12px;"/></div></div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">';
+  html += '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">Nama Toko</label>'+
+    '<input id="profile-name" value="'+esc(pe.name)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;" placeholder="Contoh: Kopi Senja"/></div>';
+  html += '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">No. HP</label>'+
+    '<input id="profile-phone" type="tel" value="'+esc(pe.phone)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;" placeholder="0812-xxxx-xxxx"/></div>';
+  html += '</div>';
+
+  html += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">Alamat Toko</label>'+
+    '<textarea id="profile-address" rows="2" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:14px;resize:vertical;font-family:inherit;" placeholder="Jl. Melati No. 12, Jakarta Selatan">'+esc(pe.address)+'</textarea>';
+
+  html += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:6px;">Email</label>'+
+    '<input id="profile-email" type="email" value="'+esc(pe.email)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="kontak@kopisenja.com"/>';
+
+  if(pe.error){ html += '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(pe.error)+'</div>'; }
+  if(pe.saved){ html += '<div style="background:var(--good-bg);color:var(--good);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">Tersimpan.</div>'; }
+
+  html += '<button class="btn btn-primary" data-save-profile-settings '+(pe.busy?"disabled":"")+'>'+(pe.busy?"Menyimpan...":"Simpan Perubahan")+'</button>';
+  html += '</div>';
+  return html;
+}
+
+/* ---------- Pengaturan: Printer & Nota ---------- */
 function ensureReceiptEditorInit(){
   if(state.receiptEditor) return;
   var o = state.outlet || {};
@@ -1362,14 +1479,18 @@ async function handleSaveReceiptSettings(){
 }
 
 function renderPengaturan(){
+  ensureProfileEditorInit();
   ensureReceiptEditorInit();
   var p = state.printer;
   var re = state.receiptEditor;
+
+  var html = renderProfilCard();
+
   var statusPill = p.connected
     ? '<span class="pill pill-good"><span class="pill-dot"></span>Terhubung: '+esc(p.name)+'</span>'
     : '<span class="pill pill-neutral"><span class="pill-dot"></span>Belum terhubung</span>';
 
-  var html = '<div class="card" style="padding:22px;max-width:520px;margin-bottom:20px;">';
+  html += '<div class="card" style="padding:22px;max-width:520px;margin-bottom:20px;">';
   html += '<div class="section-title" style="margin-bottom:4px;">Printer Bluetooth</div>';
   html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;">Sambungkan printer thermal portable untuk mencetak nota langsung dari halaman Kasir.</div>';
   html += '<div style="margin-bottom:16px;">'+statusPill+'</div>';
@@ -1565,6 +1686,9 @@ root.addEventListener("click", function(e){
   var saveReceiptBtn = e.target.closest("[data-save-receipt-settings]");
   if(saveReceiptBtn && !saveReceiptBtn.disabled){ handleSaveReceiptSettings(); return; }
 
+  var saveProfileBtn = e.target.closest("[data-save-profile-settings]");
+  if(saveProfileBtn && !saveProfileBtn.disabled){ handleSaveProfileSettings(); return; }
+
   var mejaCard = e.target.closest("[data-meja-id]");
   if(mejaCard){ handleMejaClick(mejaCard.getAttribute("data-meja-id")); return; }
 
@@ -1603,6 +1727,7 @@ root.addEventListener("change", function(e){
   if(e.target.id === "produk-cat-select"){ state.produk.cat = e.target.value; renderApp(); }
   if(e.target.id === "produk-modal-file"){ handleProductFileChange(e); }
   if(e.target.id === "receipt-logo-file"){ handleReceiptLogoFileChange(e); }
+  if(e.target.id === "profile-picture-file"){ handleProfilePictureFileChange(e); }
 });
 
 root.addEventListener("input", function(e){
