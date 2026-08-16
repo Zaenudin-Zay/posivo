@@ -300,6 +300,147 @@ function initials(name){ return String(name||"?").split(" ").map(function(w){ret
 function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
 function colorFor(id){ return THUMB_COLORS[Number(id)%THUMB_COLORS.length] || "#8B5E34"; }
 
+/* ---------- Printer Bluetooth (Web Bluetooth, ESC/POS) ---------- */
+var PRINTER_SERVICE_CANDIDATES = [
+  "000018f0-0000-1000-8000-00805f9b34fb",
+  "0000ff00-0000-1000-8000-00805f9b34fb",
+  "0000ffe0-0000-1000-8000-00805f9b34fb",
+  "49535343-fe7d-4ae5-8fa9-9fafd205e455",
+  "e7810a71-73ae-499d-8c15-faa9aef0c3f2"
+];
+
+function asciiSafe(s){
+  return String(s==null?"":s).normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\x00-\x7E]/g,"?");
+}
+function padRight(s,len){ s=asciiSafe(s); return s.length>=len ? s.slice(0,len) : s+" ".repeat(len-s.length); }
+function padLeft(s,len){ s=asciiSafe(s); return s.length>=len ? s.slice(-len) : " ".repeat(len-s.length)+s; }
+function centerLine(s,len){ s=asciiSafe(s); if(s.length>=len) return s.slice(0,len); var total=len-s.length, left=Math.floor(total/2); return " ".repeat(left)+s+" ".repeat(total-left); }
+function moneyShort(n){ return Number(n||0).toLocaleString("id-ID"); }
+
+async function connectPrinter(){
+  if(!navigator.bluetooth){
+    state.printer.error = "Browser ini tidak mendukung Web Bluetooth. Gunakan Chrome/Edge di Android atau Desktop (bukan iOS Safari).";
+    renderApp(); return;
+  }
+  state.printer.busy = true; state.printer.error = null; renderApp();
+  try{
+    var device = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: PRINTER_SERVICE_CANDIDATES
+    });
+    var server = await device.gatt.connect();
+    var services = await server.getPrimaryServices();
+    var writable = null;
+    for(var s=0; s<services.length && !writable; s++){
+      var chars = await services[s].getCharacteristics();
+      for(var c=0; c<chars.length; c++){
+        var props = chars[c].properties;
+        if(props && (props.write || props.writeWithoutResponse)){ writable = chars[c]; break; }
+      }
+    }
+    if(!writable){ throw new Error("Tidak menemukan fitur cetak (characteristic) di perangkat ini."); }
+
+    device.addEventListener("gattserverdisconnected", function(){
+      state.printer.connected = false;
+      state.printer.device = null;
+      state.printer.characteristic = null;
+      renderApp();
+    });
+
+    state.printer.device = device;
+    state.printer.characteristic = writable;
+    state.printer.name = device.name || "Printer Bluetooth";
+    state.printer.connected = true;
+  }catch(err){
+    state.printer.error = "Gagal terhubung: " + (err && err.message ? err.message : err);
+  }
+  state.printer.busy = false;
+  renderApp();
+}
+
+function disconnectPrinter(){
+  try{
+    if(state.printer.device && state.printer.device.gatt && state.printer.device.gatt.connected){
+      state.printer.device.gatt.disconnect();
+    }
+  }catch(_e){}
+  state.printer.connected = false;
+  state.printer.device = null;
+  state.printer.characteristic = null;
+  renderApp();
+}
+
+async function sendToPrinter(bytes){
+  var chr = state.printer.characteristic;
+  if(!chr){ throw new Error("Printer belum terhubung. Sambungkan lewat menu Pengaturan."); }
+  var chunkSize = 20;
+  for(var i=0; i<bytes.length; i+=chunkSize){
+    var chunk = bytes.slice(i, i+chunkSize);
+    if(chr.writeValueWithoutResponse){ await chr.writeValueWithoutResponse(chunk); }
+    else { await chr.writeValue(chunk); }
+    await new Promise(function(res){ setTimeout(res, 25); });
+  }
+}
+
+function buildReceiptBytes(items, meta){
+  var W = state.printer.paperWidth || 32;
+  var lines = [];
+  lines.push(centerLine((state.outlet && state.outlet.name) || "POSIVO", W));
+  lines.push(centerLine("All in one POS & Business Platform", W));
+  lines.push("-".repeat(W));
+  lines.push(padRight(new Date().toLocaleString("id-ID", {dateStyle:"medium", timeStyle:"short"}), W));
+  lines.push(padRight(meta.mejaLabel ? "Meja: " + meta.mejaLabel : "Take Away", W));
+  lines.push("-".repeat(W));
+  items.forEach(function(i){
+    lines.push(asciiSafe(i.name));
+    var qtyPrice = i.qty + " x " + moneyShort(i.price);
+    var lineTotal = moneyShort(i.qty * i.price);
+    lines.push(padRight(qtyPrice, Math.max(1, W-lineTotal.length)) + lineTotal);
+  });
+  lines.push("-".repeat(W));
+  lines.push(padRight("Subtotal", W-moneyShort(meta.subtotal).length) + moneyShort(meta.subtotal));
+  lines.push(padRight("Pajak (10%)", W-moneyShort(meta.tax).length) + moneyShort(meta.tax));
+  lines.push(padRight("TOTAL", W-moneyShort(meta.total).length) + moneyShort(meta.total));
+  lines.push(padRight("Metode: " + asciiSafe(meta.method||"-"), W));
+  lines.push("-".repeat(W));
+  lines.push(centerLine("Terima kasih!", W));
+  lines.push(centerLine("- Powered by Posivo -", W));
+  lines.push(""); lines.push(""); lines.push("");
+
+  var text = lines.join("\n") + "\n";
+  var body = new TextEncoder().encode(text);
+  var init = new Uint8Array([0x1B, 0x40]); // ESC @ (initialize printer)
+  var out = new Uint8Array(init.length + body.length);
+  out.set(init, 0); out.set(body, init.length);
+  return out;
+}
+
+async function testPrint(){
+  try{
+    await sendToPrinter(buildReceiptBytes(
+      [{ name:"Contoh Produk", qty:1, price:20000 }],
+      { mejaLabel:null, method:"Tes Cetak", subtotal:20000, tax:2000, total:22000 }
+    ));
+    state.toast = "Tes cetak berhasil dikirim ke printer";
+  }catch(err){
+    state.toast = "Gagal cetak: " + (err && err.message ? err.message : err);
+  }
+  renderApp();
+  setTimeout(function(){ state.toast = null; renderApp(); }, 3200);
+}
+
+async function printLastReceipt(){
+  if(!state.lastReceipt) return;
+  try{
+    await sendToPrinter(buildReceiptBytes(state.lastReceipt.items, state.lastReceipt.meta));
+    state.toast = "Nota berhasil dicetak";
+  }catch(err){
+    state.toast = "Gagal cetak: " + (err && err.message ? err.message : err);
+  }
+  renderApp();
+  setTimeout(function(){ state.toast = null; renderApp(); }, 3200);
+}
+
 function productThumbHTML(p, sizePx){
   if(p.image_url){
     var imgStyle = sizePx
@@ -329,6 +470,8 @@ var state = {
   produk: { query: "", cat: "Semua", cursor: 0 },
   meja: { activeModal: null },
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
+  printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
+  lastReceipt: null,
   toast: null,
   busy: false,
   sidebarPinned: false,
@@ -505,13 +648,13 @@ function renderSidebar(){
     {key:"dashboard", label:"Dashboard", icon:"dashboard"},
     {key:"kasir", label:"Kasir / Transaksi", icon:"cashier"},
     {key:"meja", label:"Meja", icon:"table"},
-    {key:"produk", label:"Produk", icon:"box"}
+    {key:"produk", label:"Produk", icon:"box"},
+    {key:"pengaturan", label:"Pengaturan", icon:"settings"}
   ];
   var soon = [
     {key:"qr", label:"QR Ordering", icon:"qr"},
     {key:"pelanggan", label:"Pelanggan", icon:"users"},
-    {key:"laporan", label:"Laporan", icon:"report"},
-    {key:"pengaturan", label:"Pengaturan", icon:"settings"}
+    {key:"laporan", label:"Laporan", icon:"report"}
   ];
   var html = '<aside class="sidebar'+(state.sidebarPinned?" pinned":"")+'">';
   html += '<div class="nav-highlight" id="navHighlight"></div>';
@@ -540,7 +683,8 @@ var META = {
   dashboard: {title:"Dashboard", sub:"Ringkasan performa outlet hari ini"},
   kasir: {title:"Kasir", sub:"Buat transaksi baru dengan cepat"},
   meja: {title:"Manajemen Meja", sub:"Pantau status seluruh meja secara real-time"},
-  produk: {title:"Produk", sub:"Kelola katalog dan stok produk"}
+  produk: {title:"Produk", sub:"Kelola katalog dan stok produk"},
+  pengaturan: {title:"Pengaturan", sub:"Koneksi printer & preferensi outlet"}
 };
 
 function trialBadge(){
@@ -556,7 +700,7 @@ function renderTopbar(){
   var now = new Date();
   var dateStr = now.toLocaleDateString("id-ID", {weekday:"long", day:"numeric", month:"long"});
   var timeStr = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
-  var rightBtn = state.view==="kasir" ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
+  var rightBtn = (state.view==="kasir"||state.view==="pengaturan") ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
   return '<div class="topbar"><div><div class="page-title">'+m.title+'</div><div class="page-sub">'+m.sub+'</div></div>'+
     '<div class="topbar-right">'+trialBadge()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
 }
@@ -695,7 +839,12 @@ function renderKasir(){
   html += '<div class="cart-panel">';
   html += '<div class="cart-header"><div class="row-between"><div class="section-title">Pesanan</div>'+
     '<select id="kasir-meja-select" style="border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;">'+mejaOptions+'</select></div>'+
-    '<div style="font-size:11.5px;color:var(--muted);margin-top:4px;">'+k.cart.length+' jenis produk</div></div>';
+    '<div class="row-between" style="margin-top:6px;">'+
+    '<div style="font-size:11.5px;color:var(--muted);">'+k.cart.length+' jenis produk</div>'+
+    (state.printer.connected
+      ? '<span class="pill pill-good" style="font-size:10.5px;"><span class="pill-dot"></span>Printer siap</span>'
+      : '<span class="pill pill-neutral" style="font-size:10.5px;">Printer belum tersambung</span>')+
+    '</div></div>';
   html += '<div class="cart-items">'+cartItemsHtml+'</div>';
   html += '<div class="cart-footer">';
   html += '<div class="row-between" style="font-size:13px;color:var(--muted);margin-bottom:6px;"><span>Subtotal</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(subtotal)+'</span></div>';
@@ -703,6 +852,9 @@ function renderKasir(){
   html += '<div class="row-between" style="font-size:16px;font-weight:700;margin-bottom:4px;"><span>Total</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(total)+'</span></div>';
   html += '<div class="pay-methods">'+payBtns+'</div>';
   html += '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;" data-pay-now '+(k.cart.length===0||state.busy?"disabled":"")+'>'+(state.busy?"Memproses...":"Bayar "+(k.cart.length>0?fmtRp(total):""))+'</button>';
+  if(state.lastReceipt){
+    html += '<button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:8px;" data-print-last>Cetak Nota Terakhir</button>';
+  }
   html += '</div></div>';
   html += '</div>';
 
@@ -772,8 +924,27 @@ async function handlePay(){
       await sb.from("tables").update({ status:"terisi" }).eq("id", k.selectedMeja);
     }
 
+    var mejaLabel = null;
+    if(k.selectedMeja){
+      var tb = state.tables.filter(function(x){ return String(x.id)===String(k.selectedMeja); })[0];
+      mejaLabel = tb ? tb.label : null;
+    }
+    state.lastReceipt = {
+      items: k.cart.map(function(i){ return { name:i.name, qty:i.qty, price:i.price }; }),
+      meta: { mejaLabel:mejaLabel, method:k.payMethod, subtotal:subtotal, tax:tax, total:total }
+    };
+
     state.toast = "Pembayaran "+fmtRp(total)+" via "+k.payMethod+" berhasil";
     k.cart = [];
+
+    if(state.printer.connected){
+      try{
+        await sendToPrinter(buildReceiptBytes(state.lastReceipt.items, state.lastReceipt.meta));
+        state.toast += " • Nota tercetak";
+      }catch(printErr){
+        state.toast += " • Gagal cetak nota otomatis";
+      }
+    }
   }catch(err){
     state.toast = "Gagal menyimpan transaksi: "+(err.message||err);
   }
@@ -1019,6 +1190,43 @@ async function handleSaveProduct(){
   }
 }
 
+/* ---------- Pengaturan ---------- */
+function renderPengaturan(){
+  var p = state.printer;
+  var statusPill = p.connected
+    ? '<span class="pill pill-good"><span class="pill-dot"></span>Terhubung: '+esc(p.name)+'</span>'
+    : '<span class="pill pill-neutral"><span class="pill-dot"></span>Belum terhubung</span>';
+
+  var html = '<div class="card" style="padding:22px;max-width:520px;">';
+  html += '<div class="section-title" style="margin-bottom:4px;">Printer Bluetooth</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;">Sambungkan printer thermal portable untuk mencetak nota langsung dari halaman Kasir.</div>';
+  html += '<div style="margin-bottom:16px;">'+statusPill+'</div>';
+
+  if(p.error){
+    html += '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:14px;">'+esc(p.error)+'</div>';
+  }
+
+  html += '<div style="display:flex;gap:10px;margin-bottom:22px;">';
+  if(!p.connected){
+    html += '<button class="btn btn-primary" data-connect-printer '+(p.busy?"disabled":"")+'>'+(p.busy?"Menghubungkan...":"Hubungkan Printer")+'</button>';
+  } else {
+    html += '<button class="btn btn-outline" data-test-print>Tes Cetak</button>';
+    html += '<button class="btn btn-outline" style="color:var(--red);" data-disconnect-printer>Putuskan</button>';
+  }
+  html += '</div>';
+
+  html += '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:8px;">Lebar Kertas</label>';
+  html += '<div style="display:flex;gap:8px;margin-bottom:8px;">';
+  [[32,"58mm"], [48,"80mm"]].forEach(function(opt){
+    var active = p.paperWidth===opt[0];
+    html += '<button class="cat-tab'+(active?" active":"")+'" data-paper-width="'+opt[0]+'">'+opt[1]+'</button>';
+  });
+  html += '</div>';
+  html += '<div style="font-size:11.5px;color:var(--muted);">Kompatibel dengan printer thermal Bluetooth Low Energy (BLE) generik yang umum dijual sebagai "printer kasir portable 58mm/80mm". Butuh Chrome/Edge di Android atau Desktop — Web Bluetooth tidak didukung Safari/iOS.</div>';
+  html += '</div>';
+  return html;
+}
+
 async function deleteProduct(id){
   if(!window.confirm("Hapus produk ini?")) return;
   await sb.from("products").delete().eq("id", id);
@@ -1065,7 +1273,9 @@ function renderApp(){
   if(state.view==="dashboard") content = renderDashboard();
   else if(state.view==="kasir") content = renderKasir();
   else if(state.view==="meja") content = renderMeja();
-  else content = renderProduk();
+  else if(state.view==="produk") content = renderProduk();
+  else if(state.view==="pengaturan") content = renderPengaturan();
+  else content = renderDashboard();
 
   root.innerHTML = '<div class="app-shell">'+renderSidebar()+
     '<div style="flex:1;display:flex;flex-direction:column;min-width:0;">'+
@@ -1137,6 +1347,21 @@ root.addEventListener("click", function(e){
 
   var payNowBtn = e.target.closest("[data-pay-now]");
   if(payNowBtn && !payNowBtn.disabled){ handlePay(); return; }
+
+  var printLastBtn = e.target.closest("[data-print-last]");
+  if(printLastBtn){ printLastReceipt(); return; }
+
+  var connectPrinterBtn = e.target.closest("[data-connect-printer]");
+  if(connectPrinterBtn && !connectPrinterBtn.disabled){ connectPrinter(); return; }
+
+  var disconnectPrinterBtn = e.target.closest("[data-disconnect-printer]");
+  if(disconnectPrinterBtn){ disconnectPrinter(); return; }
+
+  var testPrintBtn = e.target.closest("[data-test-print]");
+  if(testPrintBtn){ testPrint(); return; }
+
+  var paperWidthBtn = e.target.closest("[data-paper-width]");
+  if(paperWidthBtn){ state.printer.paperWidth = Number(paperWidthBtn.getAttribute("data-paper-width")); renderApp(); return; }
 
   var mejaCard = e.target.closest("[data-meja-id]");
   if(mejaCard){ handleMejaClick(mejaCard.getAttribute("data-meja-id")); return; }
