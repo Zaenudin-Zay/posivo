@@ -48,22 +48,42 @@
   .app-shell{display:flex; height:100vh; overflow:hidden;}
 
   .sidebar{
-    width:250px; flex-shrink:0; background:var(--ink);
+    width:76px; flex-shrink:0; background:var(--ink);
     display:flex; flex-direction:column;
     padding:22px 16px 18px;
+    transition:width .28s cubic-bezier(.4,0,.2,1);
+    position:relative; z-index:40;
   }
-  .brand-row{display:flex; align-items:center; gap:10px; padding:0 6px 22px;}
+  .sidebar:hover, .sidebar.pinned{width:250px;}
+  .sidebar-label{
+    opacity:0; max-width:0; overflow:hidden; white-space:nowrap;
+    transition:opacity .16s ease, max-width .28s cubic-bezier(.4,0,.2,1);
+  }
+  .sidebar:hover .sidebar-label, .sidebar.pinned .sidebar-label{opacity:1; max-width:220px; transition:opacity .22s ease .08s, max-width .28s cubic-bezier(.4,0,.2,1);}
+  .sidebar-toggle{
+    position:absolute; top:20px; right:-13px; width:26px; height:26px; border-radius:50%;
+    background:var(--ink); border:1px solid #2A2724; color:#B4AEA6; display:flex;
+    align-items:center; justify-content:center; cursor:pointer; z-index:50; padding:0;
+    transition:background .15s, color .15s, border-color .15s;
+  }
+  .sidebar-toggle:hover{background:#1B1A18; color:#fff; border-color:#3A3733;}
+  .sidebar-toggle svg{transition:transform .25s ease;}
+  .sidebar.pinned .sidebar-toggle svg{transform:rotate(180deg);}
+  .brand-row{display:flex; align-items:center; gap:10px; padding:0 6px 22px; transition:gap .2s, justify-content .2s;}
+  .sidebar:not(:hover):not(.pinned) .brand-row{gap:0; justify-content:center; padding-left:0; padding-right:0;}
   .brand-logo-img{height:36px; width:auto; flex-shrink:0; display:block;}
   .brand-word{color:var(--white); font-weight:700; font-size:19px; letter-spacing:-0.01em; font-family:'Sora','Inter',sans-serif; line-height:1.1;}
   .brand-word .accent{background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent;}
   .brand-tagline{color:#9A948B; font-size:10.5px; font-weight:500; line-height:1.35; margin-top:2px;}
-  .nav-section-label{color:#6B6560; font-size:10.5px; letter-spacing:0.09em; text-transform:uppercase; padding:14px 10px 6px; font-weight:600;}
+  .nav-section-label{color:#6B6560; font-size:10.5px; letter-spacing:0.09em; text-transform:uppercase; padding:14px 10px 6px; font-weight:600; white-space:nowrap; overflow:hidden; transition:opacity .16s ease, padding .28s ease, margin .28s ease;}
+  .sidebar:not(:hover):not(.pinned) .nav-section-label{opacity:0; padding-top:0; padding-bottom:0; margin:10px 0;}
   .nav-item{
     display:flex; align-items:center; gap:11px;
     padding:10px 12px; border-radius:10px; border:none; background:transparent;
     color:#B4AEA6; font-size:13.5px; font-weight:500; width:100%; text-align:left;
-    position:relative; transition:background .15s, color .15s;
+    position:relative; isolation:isolate; transition:background .15s, color .15s, justify-content .2s, padding .2s;
   }
+  .sidebar:not(:hover):not(.pinned) .nav-item{justify-content:center; padding:10px 0; gap:0;}
   .nav-item svg{flex-shrink:0; opacity:0.85;}
   .nav-item:hover{background:#1B1A18; color:var(--white);}
   .nav-item.active{background:#1B1A18; color:var(--white);}
@@ -71,11 +91,26 @@
     content:''; position:absolute; left:-16px; top:8px; bottom:8px; width:3px;
     border-radius:0 4px 4px 0; background:var(--grad);
   }
+  .nav-item::after{
+    content:''; position:absolute; inset:0; border-radius:10px; padding:1.5px; z-index:-1;
+    background:conic-gradient(from 0deg, var(--red), var(--orange), var(--red) 55%, var(--orange) 80%, var(--red));
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor; mask-composite:exclude;
+    opacity:0; transition:opacity .25s ease;
+    animation:navGlowSpin 2.4s linear infinite; animation-play-state:paused;
+    pointer-events:none;
+  }
+  .nav-item:hover::after{opacity:1; animation-play-state:running;}
+  .nav-item:hover{box-shadow:0 0 16px -4px rgba(230,57,70,0.45);}
+  @keyframes navGlowSpin{ to{ transform:rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce){ .nav-item::after{animation:none; transform:none;} }
   .sidebar-bottom{margin-top:auto; padding-top:14px; border-top:1px solid #221F1C;}
   .outlet-pill{
     display:flex; align-items:center; gap:9px; padding:9px 10px; border-radius:11px;
-    background:#161412; border:1px solid #262320;
+    background:#161412; border:1px solid #262320; transition:justify-content .2s, padding .2s;
   }
+  .sidebar:not(:hover):not(.pinned) .outlet-pill{justify-content:center; padding:9px 0; gap:0;}
+  .sidebar:not(:hover):not(.pinned) .outlet-pill [data-logout]{display:none;}
   .outlet-avatar{
     width:30px; height:30px; border-radius:8px; background:var(--grad);
     display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:12px;
@@ -297,6 +332,7 @@ var state = {
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   toast: null,
   busy: false,
+  sidebarPinned: false,
   _focusSearch: false
 };
 
@@ -478,22 +514,23 @@ function renderSidebar(){
     {key:"laporan", label:"Laporan", icon:"report"},
     {key:"pengaturan", label:"Pengaturan", icon:"settings"}
   ];
-  var html = '<aside class="sidebar">';
-  html += '<div class="brand-row">'+logoMarkSVG(38)+'<div><div class="brand-word">POSI<span class="accent">V</span>O</div><div class="brand-tagline">All in one POS &amp; Business Platform</div></div></div>';
-  html += '<div class="nav-section-label">Operasional</div>';
+  var html = '<aside class="sidebar'+(state.sidebarPinned?" pinned":"")+'">';
+  html += '<button class="sidebar-toggle" data-sidebar-toggle title="'+(state.sidebarPinned?"Kecilkan sidebar":"Buka sidebar")+'">'+svgIcon('<path d="M9 6l6 6-6 6"/>',15)+'</button>';
+  html += '<div class="brand-row">'+logoMarkSVG(38)+'<div class="sidebar-label"><div class="brand-word">POSI<span class="accent">V</span>O</div><div class="brand-tagline">All in one POS &amp; Business Platform</div></div></div>';
+  html += '<div class="nav-section-label sidebar-label">Operasional</div>';
   items.forEach(function(it){
-    html += '<button class="nav-item'+(state.view===it.key?" active":"")+'" data-nav="'+it.key+'">'+ICONS[it.icon](17)+it.label+'</button>';
+    html += '<button class="nav-item'+(state.view===it.key?" active":"")+'" data-nav="'+it.key+'" title="'+it.label+'">'+ICONS[it.icon](17)+'<span class="sidebar-label">'+it.label+'</span></button>';
   });
-  html += '<div class="nav-section-label">Lainnya</div>';
+  html += '<div class="nav-section-label sidebar-label">Lainnya</div>';
   soon.forEach(function(it){
-    html += '<button class="nav-item" style="opacity:.55;cursor:default;" title="Segera hadir">'+ICONS[it.icon](17)+it.label+'</button>';
+    html += '<button class="nav-item" style="opacity:.55;cursor:default;" title="'+it.label+' — Segera hadir">'+ICONS[it.icon](17)+'<span class="sidebar-label">'+it.label+'</span></button>';
   });
   var outletName = (state.outlet && state.outlet.name) || "Outlet";
   html += '<div class="sidebar-bottom"><div class="outlet-pill">'+
     '<div class="outlet-avatar">'+initials(outletName)+'</div>'+
-    '<div style="min-width:0;flex:1;"><div style="color:#fff;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(outletName)+'</div>'+
+    '<div class="sidebar-label" style="min-width:0;flex:1;"><div style="color:#fff;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(outletName)+'</div>'+
     '<div style="color:#8A8580;font-size:11px;">'+esc((state.profile && state.profile.role) || "")+'</div></div>'+
-    '<button data-logout title="Keluar" style="border:none;background:none;color:#8A8580;">'+ICONS.logout(15)+'</button>'+
+    '<button data-logout title="Keluar" style="border:none;background:none;color:#8A8580;flex-shrink:0;">'+ICONS.logout(15)+'</button>'+
     '</div></div>';
   html += '</aside>';
   return html;
@@ -1044,6 +1081,9 @@ function renderApp(){
 
 /* ---------- Event delegation ---------- */
 root.addEventListener("click", function(e){
+  var sidebarToggle = e.target.closest("[data-sidebar-toggle]");
+  if(sidebarToggle){ state.sidebarPinned = !state.sidebarPinned; renderApp(); return; }
+
   var logoutBtn = e.target.closest("[data-logout]");
   if(logoutBtn){ sb.auth.signOut(); return; }
 
