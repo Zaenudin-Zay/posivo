@@ -469,6 +469,7 @@ async function buildReceiptBytes(items, meta){
   lines.push("-".repeat(W));
   lines.push(padRight(new Date().toLocaleString("id-ID", {dateStyle:"medium", timeStyle:"short"}), W));
   lines.push(padRight(meta.mejaLabel ? "Meja: " + meta.mejaLabel : "Take Away", W));
+  if(meta.customerName){ lines.push(padRight("Pelanggan: " + asciiSafe(meta.customerName), W)); }
   lines.push("-".repeat(W));
   items.forEach(function(i){
     lines.push(asciiSafe(i.name));
@@ -481,6 +482,10 @@ async function buildReceiptBytes(items, meta){
   lines.push(padRight("Pajak (10%)", W-moneyShort(meta.tax).length) + moneyShort(meta.tax));
   lines.push(padRight("TOTAL", W-moneyShort(meta.total).length) + moneyShort(meta.total));
   lines.push(padRight("Metode: " + asciiSafe(meta.method||"-"), W));
+  if(meta.cashReceived!=null){
+    lines.push(padRight("Tunai", W-moneyShort(meta.cashReceived).length) + moneyShort(meta.cashReceived));
+    lines.push(padRight("Kembalian", W-moneyShort(Math.max(meta.changeAmount||0,0)).length) + moneyShort(Math.max(meta.changeAmount||0,0)));
+  }
   lines.push("-".repeat(W));
   rs.footerText.split("\n").forEach(function(l){ lines.push(centerLine(l, W)); });
   lines.push(centerLine("- Powered by Posivo -", W));
@@ -546,7 +551,7 @@ var state = {
   categories: [],
   products: [],
   tables: [],
-  kasir: { cat: "Semua", cart: [], payMethod: "QRIS", selectedMeja: "" },
+  kasir: { cat: "Semua", cart: [], payMethod: "QRIS", selectedMeja: "", orderType: "takeaway", customerName: "", cashReceived: "" },
   produk: { query: "", cat: "Semua", cursor: 0 },
   meja: { activeModal: null },
   riwayat: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
@@ -949,9 +954,13 @@ function renderKasir(){
     }).join("");
   }
 
-  var mejaOptions = '<option value="">Take Away</option>' + state.tables.map(function(t){
+  var mejaOptions = state.tables.map(function(t){
     return '<option value="'+t.id+'"'+(String(k.selectedMeja)===String(t.id)?" selected":"")+'>'+esc(t.label)+'</option>';
   }).join("");
+  var orderTypeSelect = '<select id="kasir-order-type" style="border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;">'+
+    '<option value="takeaway"'+(k.orderType==="takeaway"?" selected":"")+'>Take Away</option>'+
+    '<option value="dinein"'+(k.orderType==="dinein"?" selected":"")+'>Dine In</option>'+
+    '</select>';
 
   var payBtns = ["QRIS","Tunai","Kartu","Transfer"].map(function(m){
     return '<button class="pay-btn'+(k.payMethod===m?" active":"")+'" data-pay-method="'+m+'">'+m+'</button>';
@@ -960,9 +969,13 @@ function renderKasir(){
   var html = '<div class="pos-layout">';
   html += '<div class="pos-products"><div class="cat-tabs">'+catTabs+'</div><div class="product-grid">'+productCards+'</div></div>';
   html += '<div class="cart-panel">';
-  html += '<div class="cart-header"><div class="row-between"><div class="section-title">Pesanan</div>'+
-    '<select id="kasir-meja-select" style="border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;">'+mejaOptions+'</select></div>'+
-    '<div class="row-between" style="margin-top:6px;">'+
+  html += '<div class="cart-header"><div class="row-between"><div class="section-title">Pesanan</div>'+orderTypeSelect+'</div>';
+  if(k.orderType==="dinein"){
+    html += '<div class="row-between" style="margin-top:8px;"><span style="font-size:11.5px;color:var(--muted);flex-shrink:0;margin-right:8px;">Meja</span>'+
+      '<select id="kasir-meja-select" style="flex:1;border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;">'+mejaOptions+'</select></div>';
+  }
+  html += '<div style="margin-top:8px;"><input id="kasir-customer-name" placeholder="Nama pelanggan (opsional)" value="'+esc(k.customerName)+'" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:12.5px;"/></div>';
+  html += '<div class="row-between" style="margin-top:8px;">'+
     '<div style="font-size:11.5px;color:var(--muted);">'+k.cart.length+' jenis produk</div>'+
     (state.printer.connected
       ? '<span class="pill pill-good" style="font-size:10.5px;"><span class="pill-dot"></span>Printer siap</span>'
@@ -974,7 +987,21 @@ function renderKasir(){
   html += '<div class="row-between" style="font-size:13px;color:var(--muted);margin-bottom:10px;"><span>Pajak (10%)</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(tax)+'</span></div>';
   html += '<div class="row-between" style="font-size:16px;font-weight:700;margin-bottom:4px;"><span>Total</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(total)+'</span></div>';
   html += '<div class="pay-methods">'+payBtns+'</div>';
-  html += '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;" data-pay-now '+(k.cart.length===0||state.busy?"disabled":"")+'>'+(state.busy?"Memproses...":"Bayar "+(k.cart.length>0?fmtRp(total):""))+'</button>';
+
+  var cashInsufficient = false;
+  if(k.payMethod==="Tunai"){
+    var cashReceived = k.cashReceived==="" ? null : Number(k.cashReceived);
+    var kembalian = cashReceived==null ? null : cashReceived - total;
+    cashInsufficient = cashReceived==null || kembalian<0;
+    html += '<div style="margin:10px 0 2px;">'+
+      '<label style="font-size:11.5px;color:var(--muted);display:block;margin-bottom:4px;">Uang Tunai Diterima</label>'+
+      '<input id="kasir-cash-received" type="text" inputmode="numeric" placeholder="0" value="'+esc(k.cashReceived)+'" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:9px 10px;font-size:13px;font-family:JetBrains Mono,monospace;"/>'+
+      '<div class="row-between" style="margin-top:8px;font-size:13.5px;font-weight:700;'+(kembalian!=null&&kembalian<0?"color:var(--red);":"color:var(--good);")+'"><span style="font-weight:600;font-size:13px;color:var(--muted);">Kembalian</span><span style="font-family:JetBrains Mono,monospace;">'+(kembalian==null?"—":fmtRp(Math.max(kembalian,0)))+'</span></div>'+
+      (kembalian!=null && kembalian<0 ? '<div style="font-size:11px;color:var(--red);margin-top:2px;">Uang tunai kurang '+fmtRp(Math.abs(kembalian))+'</div>' : '')+
+      '</div>';
+  }
+
+  html += '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;margin-top:6px;" data-pay-now '+(k.cart.length===0||state.busy||cashInsufficient?"disabled":"")+'>'+(state.busy?"Memproses...":"Bayar "+(k.cart.length>0?fmtRp(total):""))+'</button>';
   if(state.lastReceipt){
     html += '<button class="btn btn-outline" style="width:100%;justify-content:center;margin-top:8px;" data-print-last>Cetak Nota Terakhir</button>';
   }
@@ -1020,11 +1047,15 @@ async function handlePay(){
   var subtotal = k.cart.reduce(function(s,i){ return s+i.price*i.qty; }, 0);
   var tax = Math.round(subtotal*0.10);
   var total = subtotal + tax;
+  var cashReceived = k.payMethod==="Tunai" ? (Number(k.cashReceived)||0) : null;
+  var changeAmount = cashReceived!=null ? (cashReceived - total) : null;
 
   try{
     var { data: order, error: orderErr } = await sb.from("orders").insert({
       outlet_id: state.profile.outlet_id,
-      table_id: k.selectedMeja || null,
+      table_id: k.orderType==="dinein" ? (k.selectedMeja || null) : null,
+      order_type: k.orderType,
+      customer_name: k.customerName ? k.customerName.trim() : null,
       source: "kasir",
       status: "selesai",
       subtotal: subtotal, tax: tax, total: total,
@@ -1039,26 +1070,29 @@ async function handlePay(){
     if(itemsErr) throw itemsErr;
 
     var { error: payErr } = await sb.from("payments").insert({
-      order_id: order.id, method: k.payMethod.toLowerCase(), amount: total
+      order_id: order.id, method: k.payMethod.toLowerCase(), amount: total,
+      cash_received: cashReceived, change_amount: changeAmount
     });
     if(payErr) throw payErr;
 
-    if(k.selectedMeja){
+    if(k.orderType==="dinein" && k.selectedMeja){
       await sb.from("tables").update({ status:"terisi" }).eq("id", k.selectedMeja);
     }
 
     var mejaLabel = null;
-    if(k.selectedMeja){
+    if(k.orderType==="dinein" && k.selectedMeja){
       var tb = state.tables.filter(function(x){ return String(x.id)===String(k.selectedMeja); })[0];
       mejaLabel = tb ? tb.label : null;
     }
     state.lastReceipt = {
       items: k.cart.map(function(i){ return { name:i.name, qty:i.qty, price:i.price }; }),
-      meta: { mejaLabel:mejaLabel, method:k.payMethod, subtotal:subtotal, tax:tax, total:total }
+      meta: { mejaLabel:mejaLabel, method:k.payMethod, subtotal:subtotal, tax:tax, total:total, customerName:k.customerName||null, cashReceived:cashReceived, changeAmount:changeAmount }
     };
 
     state.toast = "Pembayaran "+fmtRp(total)+" via "+k.payMethod+" berhasil";
     k.cart = [];
+    k.cashReceived = "";
+    k.customerName = "";
     refreshDashboardStats().then(renderApp);
 
     if(state.printer.connected){
@@ -1885,6 +1919,11 @@ root.addEventListener("click", function(e){
 
 root.addEventListener("change", function(e){
   if(e.target.id === "kasir-meja-select"){ state.kasir.selectedMeja = e.target.value; }
+  if(e.target.id === "kasir-order-type"){
+    state.kasir.orderType = e.target.value;
+    if(state.kasir.orderType==="takeaway") state.kasir.selectedMeja = "";
+    renderApp();
+  }
   if(e.target.id === "produk-cat-select"){ state.produk.cat = e.target.value; renderApp(); }
   if(e.target.id === "produk-modal-file"){ handleProductFileChange(e); }
   if(e.target.id === "receipt-logo-file"){ handleReceiptLogoFileChange(e); }
@@ -1905,6 +1944,16 @@ root.addEventListener("input", function(e){
   if(e.target.id === "receipt-header-text" || e.target.id === "receipt-footer-text"){
     var field = e.target.id === "receipt-header-text" ? "headerText" : "footerText";
     state.receiptEditor[field] = e.target.value;
+    state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
+    renderApp();
+  }
+  if(e.target.id === "kasir-customer-name"){
+    state.kasir.customerName = e.target.value;
+    state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
+    renderApp();
+  }
+  if(e.target.id === "kasir-cash-received"){
+    state.kasir.cashReceived = e.target.value.replace(/[^0-9]/g, "");
     state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
     renderApp();
   }
