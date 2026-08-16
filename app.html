@@ -1079,6 +1079,18 @@ async function handlePay(){
       await sb.from("tables").update({ status:"terisi" }).eq("id", k.selectedMeja);
     }
 
+    var stockUpdates = k.cart.map(function(i){
+      var prod = state.products.filter(function(p){ return p.id===i.id; })[0];
+      var newStock = Math.max(0, (prod ? (prod.stock||0) : 0) - i.qty);
+      return sb.from("products").update({ stock: newStock }).eq("id", i.id);
+    });
+    await Promise.all(stockUpdates);
+    state.products = state.products.map(function(p){
+      var cartItem = k.cart.filter(function(i){ return i.id===p.id; })[0];
+      if(!cartItem) return p;
+      return Object.assign({}, p, { stock: Math.max(0, (p.stock||0) - cartItem.qty) });
+    });
+
     var mejaLabel = null;
     if(k.orderType==="dinein" && k.selectedMeja){
       var tb = state.tables.filter(function(x){ return String(x.id)===String(k.selectedMeja); })[0];
@@ -1093,6 +1105,9 @@ async function handlePay(){
     k.cart = [];
     k.cashReceived = "";
     k.customerName = "";
+    k.orderType = "takeaway";
+    k.selectedMeja = "";
+    k.payMethod = "QRIS";
     refreshDashboardStats().then(renderApp);
 
     if(state.printer.connected){
