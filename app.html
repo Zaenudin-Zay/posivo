@@ -558,6 +558,7 @@ var state = {
   todaySales: 0,
   todayTransCount: 0,
   recentOrders: [],
+  kasirManager: { list:[], loading:false, loaded:false, error:null, modalOpen:false, mode:"add", editId:null, form:{fullName:"",email:"",password:""}, busy:false, formError:null, upgradeInfoOpen:false },
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
   receiptEditor: null,
@@ -747,6 +748,9 @@ async function handleSignupSubmit(e){
 }
 
 /* ---------- Sidebar / Topbar ---------- */
+function isOwner(){ return state.profile && state.profile.role === "owner"; }
+function isKasir(){ return state.profile && state.profile.role === "kasir"; }
+
 function renderSidebar(){
   var items = [
     {key:"dashboard", label:"Dashboard", icon:"dashboard"},
@@ -756,6 +760,9 @@ function renderSidebar(){
     {key:"produk", label:"Produk", icon:"box"},
     {key:"pengaturan", label:"Pengaturan", icon:"settings"}
   ];
+  if(isKasir()){
+    items = items.filter(function(it){ return it.key!=="pengaturan"; });
+  }
   var soon = [
     {key:"qr", label:"QR Ordering", icon:"qr"},
     {key:"pelanggan", label:"Pelanggan", icon:"users"},
@@ -867,12 +874,20 @@ function statCard(label, value, delta, up, iconKey, iconBg, iconColor){
 
 function renderDashboard(){
   var mejaAktif = state.tables.filter(function(t){ return t.status!=="kosong"; }).length;
-  var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">';
+  var kasirView = isKasir();
+
+  var html = '<div style="display:grid;grid-template-columns:repeat('+(kasirView?3:4)+',1fr);gap:16px;margin-bottom:20px;">';
   html += statCard("Penjualan Hari Ini", fmtRp(state.todaySales), state.todayTransCount+" transaksi hari ini", true, "trend","#FBEDEC","#E63946");
   html += statCard("Transaksi", String(state.todayTransCount), state.todayTransCount>0?"hari ini":"Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
-  html += statCard("Produk Aktif", String(state.products.length), state.products.length+" item terdaftar", true, "box","#EFECE6","#0D0D0D");
+  if(!kasirView){
+    html += statCard("Produk Aktif", String(state.products.length), state.products.length+" item terdaftar", true, "box","#EFECE6","#0D0D0D");
+  }
   html += statCard("Meja Aktif", mejaAktif+" / "+state.tables.length, "real-time dari Supabase", true, "table","#EFECE6","#0D0D0D");
   html += '</div>';
+
+  if(kasirView){
+    return html;
+  }
 
   html += '<div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px;margin-bottom:16px;">';
   html += '<div class="card" style="padding:18px 20px;"><div class="row-between" style="margin-bottom:6px;"><div class="section-title">Grafik Penjualan</div><span class="pill pill-neutral">Contoh tampilan</span></div>'+
@@ -1080,9 +1095,7 @@ async function handlePay(){
     }
 
     var stockUpdates = k.cart.map(function(i){
-      var prod = state.products.filter(function(p){ return p.id===i.id; })[0];
-      var newStock = Math.max(0, (prod ? (prod.stock||0) : 0) - i.qty);
-      return sb.from("products").update({ stock: newStock }).eq("id", i.id);
+      return sb.rpc("decrement_stock", { p_product_id: i.id, p_qty: i.qty });
     });
     await Promise.all(stockUpdates);
     state.products = state.products.map(function(p){
@@ -1301,17 +1314,18 @@ function renderProduk(){
     return '<option'+(c===pr.cat?" selected":"")+'>'+esc(c)+'</option>';
   }).join("");
 
+  var canEdit = !isKasir();
   var html = '<div class="row-between" style="margin-bottom:16px;flex-wrap:wrap;gap:12px;">';
   html += '<div class="search-bar">'+ICONS.search(15)+'<input id="produk-search" placeholder="Cari produk..." value="'+esc(pr.query)+'"/></div>';
   html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+
     '<select id="produk-cat-select" style="border:1px solid var(--border);border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:600;background:#fff;">'+catOptions+'</select>'+
-    '<button class="btn btn-primary" data-add-produk>'+ICONS.plus(15)+' Tambah Produk</button></div>';
+    (canEdit ? '<button class="btn btn-primary" data-add-produk>'+ICONS.plus(15)+' Tambah Produk</button>' : '<span class="pill pill-neutral">Lihat saja</span>')+'</div>';
   html += '</div>';
 
-  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th>Status</th><th style="text-align:right;padding-right:16px;">Aksi</th></tr></thead><tbody>';
+  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
 
   if(state.products.length===0){
-    html += '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk. Klik "Tambah Produk" untuk mulai mengisi katalog.</td></tr>';
+    html += '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</td></tr>';
   } else if(filtered.length===0){
     html += '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted);">Tidak ada produk yang cocok.</td></tr>';
   } else {
@@ -1328,9 +1342,9 @@ function renderProduk(){
         '<td><span class="pill pill-neutral">'+esc(categoryName(p.category_id))+'</span></td>'+
         '<td style="font-family:JetBrains Mono,monospace;font-weight:600;">'+fmtRp(p.price)+'</td>'+
         '<td>'+stok+'</td><td>'+statusPill+'</td>'+
-        '<td style="text-align:right;padding-right:10px;">'+
+        (canEdit ? '<td style="text-align:right;padding-right:10px;">'+
         '<button data-edit-produk="'+p.id+'" style="border:none;background:none;color:var(--muted);margin-right:8px;">'+ICONS.edit(15)+'</button>'+
-        '<button data-delete-produk="'+p.id+'" style="border:none;background:none;color:var(--red);">'+ICONS.trash(15)+'</button></td></tr>';
+        '<button data-delete-produk="'+p.id+'" style="border:none;background:none;color:var(--red);">'+ICONS.trash(15)+'</button></td>' : '')+'</tr>';
     });
   }
   html += '</tbody></table></div>';
@@ -1674,6 +1688,174 @@ async function handleSaveReceiptSettings(){
   if(!re.error){ setTimeout(function(){ if(state.receiptEditor){ state.receiptEditor.saved = false; renderApp(); } }, 2500); }
 }
 
+/* ---------- Kelola Kasir ---------- */
+async function loadKasirList(){
+  if(!isOwner()) return;
+  var km = state.kasirManager;
+  km.loading = true; renderApp();
+  var { data, error } = await sb.from("profiles").select("id,full_name,role,created_at")
+    .eq("outlet_id", state.profile.outlet_id).eq("role","kasir").order("created_at");
+  km.loading = false;
+  if(error){ km.error = error.message; renderApp(); return; }
+  km.list = data || [];
+  km.loaded = true;
+  renderApp();
+}
+
+function kasirSlotLimit(){
+  return 2 + Number((state.outlet && state.outlet.extra_kasir_slots) || 0);
+}
+
+function openAddKasirModal(){
+  state.kasirManager.modalOpen = true;
+  state.kasirManager.mode = "add";
+  state.kasirManager.editId = null;
+  state.kasirManager.form = { fullName:"", email:"", password:"" };
+  state.kasirManager.formError = null;
+  renderApp();
+}
+
+function openEditKasirModal(id){
+  var k = state.kasirManager.list.filter(function(x){ return x.id===id; })[0];
+  if(!k) return;
+  state.kasirManager.modalOpen = true;
+  state.kasirManager.mode = "edit";
+  state.kasirManager.editId = id;
+  state.kasirManager.form = { fullName:k.full_name||"", email:"", password:"" };
+  state.kasirManager.formError = null;
+  renderApp();
+}
+
+function closeKasirModal(){
+  state.kasirManager.modalOpen = false;
+  renderApp();
+}
+
+async function handleSaveKasir(){
+  var km = state.kasirManager;
+  var f = km.form;
+  if(km.mode==="add"){
+    if(!f.fullName.trim() || !f.email.trim() || !f.password || f.password.length<6){
+      km.formError = "Nama, email, dan password (min. 6 karakter) wajib diisi.";
+      renderApp(); return;
+    }
+    if(km.list.length >= kasirSlotLimit()){
+      km.formError = "Batas akun kasir tercapai. Tambah slot dulu di bawah.";
+      renderApp(); return;
+    }
+    km.busy = true; km.formError = null; renderApp();
+    var { data, error } = await sb.functions.invoke("create-kasir", {
+      body: { fullName: f.fullName.trim(), email: f.email.trim(), password: f.password, outlet_id: state.profile.outlet_id }
+    });
+    km.busy = false;
+    if(error || (data && data.error)){
+      km.formError = (data && data.error) || error.message || "Gagal membuat akun kasir.";
+      renderApp(); return;
+    }
+    km.modalOpen = false;
+    await loadKasirList();
+  } else {
+    if(!f.fullName.trim()){ km.formError = "Nama wajib diisi."; renderApp(); return; }
+    km.busy = true; km.formError = null; renderApp();
+    var { error: upErr } = await sb.from("profiles").update({ full_name: f.fullName.trim() }).eq("id", km.editId);
+    km.busy = false;
+    if(upErr){ km.formError = upErr.message; renderApp(); return; }
+    if(f.password){
+      var { data: pwData, error: pwErr } = await sb.functions.invoke("reset-kasir-password", {
+        body: { id: km.editId, password: f.password }
+      });
+      if(pwErr || (pwData && pwData.error)){
+        km.formError = (pwData && pwData.error) || pwErr.message || "Nama tersimpan, tapi gagal reset password.";
+        renderApp(); return;
+      }
+    }
+    km.modalOpen = false;
+    await loadKasirList();
+  }
+}
+
+async function deleteKasir(id){
+  if(!window.confirm("Hapus akun kasir ini? Login-nya akan langsung dinonaktifkan.")) return;
+  var { data, error } = await sb.functions.invoke("delete-kasir", { body: { id: id } });
+  if(error || (data && data.error)){
+    alert("Gagal menghapus: " + ((data && data.error) || error.message));
+    return;
+  }
+  await loadKasirList();
+}
+
+function renderKasirManagerCard(){
+  var km = state.kasirManager;
+  if(!km.loaded && !km.loading) loadKasirList();
+
+  var limit = kasirSlotLimit();
+  var used = km.list.length;
+  var atLimit = used >= limit;
+
+  var html = '<div class="card" style="padding:22px;max-width:820px;margin-bottom:20px;">';
+  html += '<div class="row-between" style="margin-bottom:4px;"><div class="section-title">Kelola Akun Kasir</div>'+
+    '<span class="pill '+(atLimit?"pill-warn":"pill-neutral")+'">'+used+' / '+limit+' akun dipakai</span></div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:16px;">Akun kasir bisa akses Kasir, Riwayat Transaksi, Meja, dan lihat Produk (tanpa ubah harga/stok manual). 2 akun kasir pertama gratis.</div>';
+
+  if(km.loading && !km.loaded){
+    html += '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12.5px;">Memuat...</div>';
+  } else if(km.list.length===0){
+    html += '<div style="padding:16px 0;color:var(--muted);font-size:12.5px;">Belum ada akun kasir.</div>';
+  } else {
+    html += '<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px;">';
+    km.list.forEach(function(k, idx){
+      html += '<div class="row-between" style="padding:12px 14px;'+(idx>0?"border-top:1px solid var(--border);":"")+'">'+
+        '<div><div style="font-weight:600;font-size:13px;">'+esc(k.full_name||"(tanpa nama)")+'</div><div style="font-size:11.5px;color:var(--muted);">Kasir</div></div>'+
+        '<div style="display:flex;gap:6px;"><button data-edit-kasir="'+k.id+'" style="border:none;background:none;color:var(--muted);padding:4px;">'+ICONS.edit(15)+'</button>'+
+        '<button data-delete-kasir="'+k.id+'" style="border:none;background:none;color:var(--red);padding:4px;">'+ICONS.trash(15)+'</button></div></div>';
+    });
+    html += '</div>';
+  }
+
+  if(km.error){ html += '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:14px;">'+esc(km.error)+'</div>'; }
+
+  if(!atLimit){
+    html += '<button class="btn btn-primary" data-add-kasir>'+ICONS.plus(15)+' Tambah Akun Kasir</button>';
+  } else {
+    html += '<button class="btn btn-outline" data-upgrade-kasir-info>Tambah Slot Kasir &mdash; Rp10.000/bulan</button>';
+  }
+
+  if(km.upgradeInfoOpen){
+    html += '<div style="margin-top:14px;background:#FFF6E9;border:1px solid #F3D9A8;border-radius:10px;padding:14px;font-size:12.5px;color:#7A5A12;">'+
+      '<b>Cara tambah slot kasir:</b> transfer Rp10.000 per slot/bulan ke rekening/QRIS Posivo, lalu konfirmasi ke admin dengan menyertakan nama outlet. Slot akan diaktifkan manual dalam 1x24 jam. (Pembayaran otomatis via payment gateway belum tersedia.)'+
+      '</div>';
+  }
+
+  html += renderKasirModal();
+  html += '</div>';
+  return html;
+}
+
+function renderKasirModal(){
+  var km = state.kasirManager;
+  if(!km.modalOpen) return "";
+  var f = km.form;
+  return '<div class="modal-backdrop" data-modal-backdrop-kasir>'+
+    '<div class="modal-card" style="width:380px;text-align:left;">'+
+    '<div class="row-between" style="margin-bottom:14px;">'+
+    '<div class="section-title">'+(km.mode==="edit"?"Edit Akun Kasir":"Tambah Akun Kasir")+'</div>'+
+    '<button data-close-kasir-modal style="border:none;background:none;">'+ICONS.x(18)+'</button>'+
+    '</div>'+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Nama Lengkap</label>'+
+    '<input id="kasir-modal-name" value="'+esc(f.fullName)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="Nama kasir"/>'+
+    (km.mode==="add" ? (
+      '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Email</label>'+
+      '<input id="kasir-modal-email" type="email" value="'+esc(f.email)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="kasir@outlet.com"/>'
+    ) : "")+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">'+(km.mode==="edit"?"Password Baru (opsional)":"Password")+'</label>'+
+    '<input id="kasir-modal-password" type="text" value="'+esc(f.password)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="Minimal 6 karakter"/>'+
+    (km.formError ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(km.formError)+'</div>' : '')+
+    '<div style="display:flex;gap:10px;">'+
+    '<button class="btn btn-outline" style="flex:1;justify-content:center;" data-close-kasir-modal>Cancel</button>'+
+    '<button class="btn btn-primary" style="flex:1;justify-content:center;" data-save-kasir-modal '+(km.busy?"disabled":"")+'>'+(km.busy?"Menyimpan...":"Simpan")+'</button>'+
+    '</div></div></div>';
+}
+
 function renderPengaturan(){
   ensureProfileEditorInit();
   ensureReceiptEditorInit();
@@ -1681,6 +1863,7 @@ function renderPengaturan(){
   var re = state.receiptEditor;
 
   var html = renderProfilCard();
+  if(isOwner()){ html += renderKasirManagerCard(); }
 
   var statusPill = p.connected
     ? '<span class="pill pill-good"><span class="pill-dot"></span>Terhubung: '+esc(p.name)+'</span>'
@@ -1781,6 +1964,7 @@ function renderApp(){
   }
 
   var content;
+  if(isKasir() && state.view==="pengaturan"){ state.view = "dashboard"; }
   if(state.view==="dashboard") content = renderDashboard();
   else if(state.view==="kasir") content = renderKasir();
   else if(state.view==="riwayat") content = renderRiwayat();
@@ -1930,6 +2114,28 @@ root.addEventListener("click", function(e){
   if(e.target.hasAttribute && e.target.hasAttribute("data-modal-backdrop-produk")){
     closeProductModal(); return;
   }
+
+  var addKasirBtn = e.target.closest("[data-add-kasir]");
+  if(addKasirBtn){ openAddKasirModal(); return; }
+
+  var editKasirBtn = e.target.closest("[data-edit-kasir]");
+  if(editKasirBtn){ openEditKasirModal(editKasirBtn.getAttribute("data-edit-kasir")); return; }
+
+  var delKasirBtn = e.target.closest("[data-delete-kasir]");
+  if(delKasirBtn){ deleteKasir(delKasirBtn.getAttribute("data-delete-kasir")); return; }
+
+  var closeKasirModalBtn = e.target.closest("[data-close-kasir-modal]");
+  if(closeKasirModalBtn){ closeKasirModal(); return; }
+
+  var saveKasirModalBtn = e.target.closest("[data-save-kasir-modal]");
+  if(saveKasirModalBtn && !saveKasirModalBtn.disabled){ handleSaveKasir(); return; }
+
+  if(e.target.hasAttribute && e.target.hasAttribute("data-modal-backdrop-kasir")){
+    closeKasirModal(); return;
+  }
+
+  var upgradeKasirBtn = e.target.closest("[data-upgrade-kasir-info]");
+  if(upgradeKasirBtn){ state.kasirManager.upgradeInfoOpen = !state.kasirManager.upgradeInfoOpen; renderApp(); return; }
 });
 
 root.addEventListener("change", function(e){
@@ -1969,6 +2175,12 @@ root.addEventListener("input", function(e){
   }
   if(e.target.id === "kasir-cash-received"){
     state.kasir.cashReceived = e.target.value.replace(/[^0-9]/g, "");
+    state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
+    renderApp();
+  }
+  if(e.target.id === "kasir-modal-name" || e.target.id === "kasir-modal-email" || e.target.id === "kasir-modal-password"){
+    var fmap = { "kasir-modal-name":"fullName", "kasir-modal-email":"email", "kasir-modal-password":"password" };
+    state.kasirManager.form[fmap[e.target.id]] = e.target.value;
     state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
     renderApp();
   }
