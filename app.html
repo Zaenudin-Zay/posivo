@@ -1844,8 +1844,8 @@ function renderProductModal(){
   if(!m || !m.open) return "";
   var previewSrc = m.imagePreviewUrl || m.existingImageUrl || "";
   var previewHtml = previewSrc
-    ? '<img src="'+esc(previewSrc)+'" style="width:100%;height:150px;object-fit:cover;border-radius:12px;margin-bottom:12px;"/>'
-    : '<div style="width:100%;height:150px;border-radius:12px;background:#F1EDE6;display:flex;align-items:center;justify-content:center;color:var(--muted-2);font-size:12px;margin-bottom:12px;">Belum ada foto</div>';
+    ? '<img src="'+esc(previewSrc)+'" style="width:100%;height:45px;object-fit:cover;border-radius:10px;margin-bottom:10px;"/>'
+    : '<div style="width:100%;height:45px;border-radius:10px;background:#F1EDE6;display:flex;align-items:center;justify-content:center;color:var(--muted-2);font-size:11px;margin-bottom:10px;">Belum ada foto</div>';
 
   return '<div class="modal-backdrop" data-modal-backdrop-produk>'+
     '<div class="modal-card" style="width:400px;text-align:left;">'+
