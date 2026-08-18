@@ -481,7 +481,7 @@ async function buildReceiptBytes(items, meta){
   });
   lines.push("-".repeat(W));
   lines.push(padRight("Subtotal", W-moneyShort(meta.subtotal).length) + moneyShort(meta.subtotal));
-  lines.push(padRight("Pajak (10%)", W-moneyShort(meta.tax).length) + moneyShort(meta.tax));
+  lines.push(padRight(asciiSafe(meta.taxLabel || "Pajak"), W-moneyShort(meta.tax).length) + moneyShort(meta.tax));
   lines.push(padRight("TOTAL", W-moneyShort(meta.total).length) + moneyShort(meta.total));
   lines.push(padRight("Metode: " + asciiSafe(meta.method||"-"), W));
   if(meta.cashReceived!=null){
@@ -563,7 +563,7 @@ var state = {
   recentOrders: [],
   dashboardPeriod: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
   kasirManager: { list:[], loading:false, loaded:false, error:null, modalOpen:false, mode:"add", editId:null, form:{fullName:"",email:"",password:""}, busy:false, formError:null, upgradeInfoOpen:false },
-  produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
+  produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", tax:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
   receiptEditor: null,
   profileEditor: null,
@@ -1037,6 +1037,20 @@ function renderDashboard(){
 }
 
 /* ---------- Kasir ---------- */
+function computeCartTotals(cart){
+  var subtotal = cart.reduce(function(s,i){ return s+i.price*i.qty; }, 0);
+  var tax = cart.reduce(function(s,i){ return s + Math.round(i.price*i.qty*((Number(i.tax_percent)||0)/100)); }, 0);
+  return { subtotal:subtotal, tax:tax, total:subtotal+tax };
+}
+function taxLabelForCart(cart){
+  if(!cart || cart.length===0) return "Pajak";
+  var rates = Array.from(new Set(cart.map(function(i){ return Number(i.tax_percent)||0; })));
+  if(rates.length===1){
+    return rates[0]>0 ? "Pajak (PPN "+rates[0]+"%)" : "Pajak (Tanpa PPN)";
+  }
+  return "Pajak (PPN campuran)";
+}
+
 function renderKasir(){
   var k = state.kasir;
   var catNames = ["Semua"].concat(Array.from(new Set(state.products.map(function(p){ return p.category_id ? categoryName(p.category_id) : "Lainnya"; }))));
@@ -1064,9 +1078,8 @@ function renderKasir(){
       '</div></button>';
   }).join("");
 
-  var subtotal = k.cart.reduce(function(s,i){ return s+i.price*i.qty; }, 0);
-  var tax = Math.round(subtotal*0.10);
-  var total = subtotal + tax;
+  var totals = computeCartTotals(k.cart);
+  var subtotal = totals.subtotal, tax = totals.tax, total = totals.total;
 
   var cartItemsHtml;
   if(k.cart.length===0){
@@ -1117,7 +1130,7 @@ function renderKasir(){
   html += '<div class="cart-items">'+cartItemsHtml+'</div>';
   html += '<div class="cart-footer">';
   html += '<div class="row-between" style="font-size:13px;color:var(--muted);margin-bottom:6px;"><span>Subtotal</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(subtotal)+'</span></div>';
-  html += '<div class="row-between" style="font-size:13px;color:var(--muted);margin-bottom:10px;"><span>Pajak (10%)</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(tax)+'</span></div>';
+  html += '<div class="row-between" style="font-size:13px;color:var(--muted);margin-bottom:10px;"><span>'+taxLabelForCart(k.cart)+'</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(tax)+'</span></div>';
   html += '<div class="row-between" style="font-size:16px;font-weight:700;margin-bottom:4px;"><span>Total</span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(total)+'</span></div>';
   html += '<div class="pay-methods">'+payBtns+'</div>';
 
@@ -1157,7 +1170,7 @@ function addToCart(id){
   if(!p || (p.stock||0)<=0) return;
   var found = state.kasir.cart.filter(function(i){ return i.id===id; })[0];
   if(found){ found.qty += 1; }
-  else { state.kasir.cart.push({ id:p.id, name:p.name, price:Number(p.price), qty:1, image_url:p.image_url||null }); }
+  else { state.kasir.cart.push({ id:p.id, name:p.name, price:Number(p.price), qty:1, image_url:p.image_url||null, tax_percent:Number(p.tax_percent)||0 }); }
   renderApp();
 }
 function changeQty(id, delta){
@@ -1177,10 +1190,8 @@ async function handlePay(){
   if(k.cart.length===0 || state.busy) return;
   state.busy = true; renderApp();
 
-  var subtotal = k.cart.reduce(function(s,i){ return s+i.price*i.qty; }, 0);
-  var tax = Math.round(subtotal*0.10);
-  var total = subtotal + tax;
-  var cashReceived = k.payMethod==="Tunai" ? (Number(k.cashReceived)||0) : null;
+  var totals = computeCartTotals(k.cart);
+  var subtotal = totals.subtotal, tax = totals.tax, total = totals.total;
   var changeAmount = cashReceived!=null ? (cashReceived - total) : null;
 
   try{
@@ -1197,7 +1208,7 @@ async function handlePay(){
     if(orderErr) throw orderErr;
 
     var items = k.cart.map(function(i){
-      return { order_id: order.id, product_id: i.id, qty: i.qty, price: i.price };
+      return { order_id: order.id, product_id: i.id, qty: i.qty, price: i.price, tax_percent: Number(i.tax_percent)||0 };
     });
     var { error: itemsErr } = await sb.from("order_items").insert(items);
     if(itemsErr) throw itemsErr;
@@ -1231,8 +1242,8 @@ async function handlePay(){
       mejaLabel = tb ? tb.label : null;
     }
     state.lastReceipt = {
-      items: k.cart.map(function(i){ return { name:i.name, qty:i.qty, price:i.price }; }),
-      meta: { mejaLabel:mejaLabel, method:k.payMethod, subtotal:subtotal, tax:tax, total:total, customerName:k.customerName||null, cashReceived:cashReceived, changeAmount:changeAmount }
+      items: k.cart.map(function(i){ return { name:i.name, qty:i.qty, price:i.price, tax_percent:i.tax_percent||0 }; }),
+      meta: { mejaLabel:mejaLabel, method:k.payMethod, subtotal:subtotal, tax:tax, total:total, taxLabel:taxLabelForCart(k.cart), customerName:k.customerName||null, cashReceived:cashReceived, changeAmount:changeAmount }
     };
 
     state.toast = "Pembayaran "+fmtRp(total)+" via "+k.payMethod+" berhasil";
@@ -1797,12 +1808,12 @@ function renderProduk(){
     (canEdit ? '<button class="btn btn-primary" data-add-produk>'+ICONS.plus(15)+' Tambah Produk</button>' : '<span class="pill pill-neutral">Lihat saja</span>')+'</div>';
   html += '</div>';
 
-  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
+  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Pajak</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
 
   if(state.products.length===0){
-    html += '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</td></tr>';
+    html += '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</td></tr>';
   } else if(filtered.length===0){
-    html += '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--muted);">Tidak ada produk yang cocok.</td></tr>';
+    html += '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">Tidak ada produk yang cocok.</td></tr>';
   } else {
     filtered.forEach(function(p){
       var stok = p.stock==null?0:p.stock;
@@ -1816,6 +1827,7 @@ function renderProduk(){
         '<span style="font-weight:600;">'+esc(p.name)+'</span></div></td>'+
         '<td><span class="pill pill-neutral">'+esc(categoryName(p.category_id))+'</span></td>'+
         '<td style="font-family:JetBrains Mono,monospace;font-weight:600;">'+fmtRp(p.price)+'</td>'+
+        '<td>'+((p.tax_percent||0)>0 ? '<span class="pill pill-neutral">PPN '+p.tax_percent+'%</span>' : '<span style="font-size:12px;color:var(--muted-2);">Tanpa PPN</span>')+'</td>'+
         '<td>'+stok+'</td><td>'+statusPill+'</td>'+
         (canEdit ? '<td style="text-align:right;padding-right:10px;">'+
         '<button data-edit-produk="'+p.id+'" style="border:none;background:none;color:var(--muted);margin-right:8px;">'+ICONS.edit(15)+'</button>'+
@@ -1852,6 +1864,12 @@ function renderProductModal(){
     '<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Qty / Stok</label>'+
     '<input id="produk-modal-stock" type="number" value="'+esc(m.stock)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;" placeholder="0"/></div>'+
     '</div>'+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Pajak (PPN)</label>'+
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'+
+    '<input id="produk-modal-tax" type="number" min="0" max="100" step="0.1" value="'+esc(m.tax)+'" style="width:90px;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;" placeholder="0"/>'+
+    '<span style="font-size:13px;color:var(--muted);">% dari harga jual</span>'+
+    '</div>'+
+    '<div style="font-size:11.5px;color:var(--muted-2);margin-bottom:14px;">Kosongkan atau isi 0 kalau produk ini tidak kena pajak. Tiap produk boleh beda tarif.</div>'+
     '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Kategori</label>'+
     '<input id="produk-modal-category" value="'+esc(m.category)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="Contoh: Kopi, Makanan, Snack"/>'+
     (m.error ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(m.error)+'</div>' : '')+
@@ -1862,7 +1880,7 @@ function renderProductModal(){
 }
 
 function openAddProductModal(){
-  state.produkModal = { open:true, mode:"add", id:null, name:"", price:"", stock:"0", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null };
+  state.produkModal = { open:true, mode:"add", id:null, name:"", price:"", stock:"0", category:"", tax:"0", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null };
   renderApp();
 }
 
@@ -1874,6 +1892,7 @@ function openEditProductModal(id){
     open:true, mode:"edit", id:p.id,
     name:p.name, price:String(p.price), stock:String(p.stock||0),
     category: cn==="Lainnya" ? "" : cn,
+    tax: String(p.tax_percent||0),
     imageFile:null, imagePreviewUrl:"", existingImageUrl:p.image_url||"",
     busy:false, error:null
   };
@@ -1908,6 +1927,10 @@ async function handleSaveProduct(){
   var price = Number(document.getElementById("produk-modal-price").value);
   var stock = Number(document.getElementById("produk-modal-stock").value) || 0;
   var categoryInput = document.getElementById("produk-modal-category").value.trim();
+  var taxInput = document.getElementById("produk-modal-tax").value;
+  var taxPercent = taxInput==="" ? 0 : Number(taxInput);
+  if(isNaN(taxPercent) || taxPercent<0) taxPercent = 0;
+  if(taxPercent>100) taxPercent = 100;
 
   if(!name || !price || isNaN(price)){
     m.error = "Nama produk dan harga wajib diisi dengan benar.";
@@ -1931,7 +1954,7 @@ async function handleSaveProduct(){
     var categoryId = null;
     if(categoryInput){ categoryId = await findOrCreateCategory(categoryInput); }
 
-    var payload = { name:name, price:price, stock:stock, image_url:imageUrl, category_id:categoryId, is_active:true };
+    var payload = { name:name, price:price, stock:stock, image_url:imageUrl, category_id:categoryId, tax_percent:taxPercent, is_active:true };
 
     if(m.mode==="edit"){
       var { error: updErr } = await sb.from("products").update(payload).eq("id", m.id);
@@ -2086,12 +2109,11 @@ function renderReceiptPreviewHTML(){
   var re = state.receiptEditor;
   var logoSrc = re.logoPreviewUrl || re.existingLogoUrl;
   var sampleItems = [
-    { name:"Kopi Susu Gula Aren", qty:2, price:22000 },
-    { name:"Nasi Goreng Spesial", qty:1, price:28000 }
+    { name:"Kopi Susu Gula Aren", qty:2, price:22000, tax_percent:11 },
+    { name:"Nasi Goreng Spesial", qty:1, price:28000, tax_percent:0 }
   ];
-  var subtotal = sampleItems.reduce(function(s,i){ return s+i.qty*i.price; }, 0);
-  var tax = Math.round(subtotal*0.10);
-  var total = subtotal+tax;
+  var sampleTotals = computeCartTotals(sampleItems);
+  var subtotal = sampleTotals.subtotal, tax = sampleTotals.tax, total = sampleTotals.total;
 
   var itemRows = sampleItems.map(function(i){
     return '<div style="margin-top:6px;">'+esc(i.name)+'</div>'+
@@ -2107,7 +2129,7 @@ function renderReceiptPreviewHTML(){
     itemRows+
     '<div style="border-top:1px dashed #bbb;margin:10px 0;"></div>'+
     '<div style="display:flex;justify-content:space-between;"><span>Subtotal</span><span>'+fmtRp(subtotal).replace("Rp ","")+'</span></div>'+
-    '<div style="display:flex;justify-content:space-between;"><span>Pajak (10%)</span><span>'+fmtRp(tax).replace("Rp ","")+'</span></div>'+
+    '<div style="display:flex;justify-content:space-between;"><span>'+taxLabelForCart(sampleItems)+'</span><span>'+fmtRp(tax).replace("Rp ","")+'</span></div>'+
     '<div style="display:flex;justify-content:space-between;font-weight:700;"><span>TOTAL</span><span>'+fmtRp(total).replace("Rp ","")+'</span></div>'+
     '<div style="border-top:1px dashed #bbb;margin:10px 0;"></div>'+
     '<div style="text-align:center;white-space:pre-line;">'+esc(re.footerText || "Terima kasih atas kunjungan Anda!")+'</div>'+
