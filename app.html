@@ -252,6 +252,7 @@
 <div id="root"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <script>
 'use strict';
 
@@ -555,6 +556,7 @@ var state = {
   produk: { query: "", cat: "Semua", cursor: 0 },
   meja: { activeModal: null, formOpen:false, form:{ label:"", area:"Indoor", capacity:"" }, formError:null, busy:false },
   riwayat: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
+  laporan: { filterType:"harian", date: localISODate(), month: localISOMonth(), orders: [], loading:false, loaded:false, error:null, pdfBusy:false, printBusy:false },
   todaySales: 0,
   todayTransCount: 0,
   recentOrders: [],
@@ -758,6 +760,7 @@ function renderSidebar(){
     {key:"riwayat", label:"Riwayat Transaksi", icon:"history"},
     {key:"meja", label:"Meja", icon:"table"},
     {key:"produk", label:"Produk", icon:"box"},
+    {key:"laporan", label:"Laporan", icon:"report"},
     {key:"pengaturan", label:"Pengaturan", icon:"settings"}
   ];
   if(isKasir()){
@@ -765,8 +768,7 @@ function renderSidebar(){
   }
   var soon = [
     {key:"qr", label:"QR Ordering", icon:"qr"},
-    {key:"pelanggan", label:"Pelanggan", icon:"users"},
-    {key:"laporan", label:"Laporan", icon:"report"}
+    {key:"pelanggan", label:"Pelanggan", icon:"users"}
   ];
   var html = '<aside class="sidebar'+(state.sidebarPinned?" pinned":"")+'">';
   html += '<div class="nav-highlight" id="navHighlight"></div>';
@@ -799,6 +801,7 @@ var META = {
   riwayat: {title:"Riwayat Transaksi", sub:"Lihat & filter seluruh transaksi berdasarkan tanggal, bulan, atau tahun"},
   meja: {title:"Manajemen Meja", sub:"Pantau status seluruh meja secara real-time"},
   produk: {title:"Produk", sub:"Kelola katalog dan stok produk"},
+  laporan: {title:"Laporan", sub:"Laporan penjualan harian & bulanan — cetak atau unduh PDF"},
   pengaturan: {title:"Pengaturan", sub:"Koneksi printer & preferensi outlet"}
 };
 
@@ -1242,6 +1245,285 @@ function renderRiwayat(){
   }
   html += '</div>';
   return html;
+}
+
+/* ---------- Laporan ---------- */
+async function loadLaporan(){
+  if(!state.profile) return;
+  var r = state.laporan;
+  r.loading = true; r.error = null; renderApp();
+
+  var start, end;
+  if(r.filterType === "harian"){
+    start = new Date(r.date+"T00:00:00");
+    end = new Date(start); end.setDate(end.getDate()+1);
+  } else {
+    var parts = r.month.split("-");
+    start = new Date(Number(parts[0]), Number(parts[1])-1, 1);
+    end = new Date(Number(parts[0]), Number(parts[1]), 1);
+  }
+
+  var { data, error } = await sb.from("orders")
+    .select("id,total,status,order_type,created_at,payments(method),order_items(qty,price,products(name))")
+    .eq("outlet_id", state.profile.outlet_id)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending:false });
+
+  r.loading = false;
+  if(error){ r.error = error.message; renderApp(); return; }
+  r.orders = data || [];
+  r.loaded = true;
+  renderApp();
+}
+
+function laporanSummary(){
+  var r = state.laporan;
+  var valid = r.orders.filter(function(o){ return o.status==="selesai"; });
+  var totalSales = valid.reduce(function(s,o){ return s+Number(o.total||0); }, 0);
+  var transCount = valid.length;
+  var avg = transCount>0 ? Math.round(totalSales/transCount) : 0;
+
+  var byMethod = {};
+  valid.forEach(function(o){
+    var m = (o.payments && o.payments[0]) ? o.payments[0].method : "lainnya";
+    byMethod[m] = byMethod[m] || { count:0, total:0 };
+    byMethod[m].count++; byMethod[m].total += Number(o.total||0);
+  });
+
+  var byType = { takeaway:{count:0,total:0}, dinein:{count:0,total:0} };
+  valid.forEach(function(o){
+    var t = o.order_type==="dinein" ? "dinein" : "takeaway";
+    byType[t].count++; byType[t].total += Number(o.total||0);
+  });
+
+  var productMap = {};
+  valid.forEach(function(o){
+    (o.order_items||[]).forEach(function(it){
+      var name = it.products ? it.products.name : "Produk";
+      productMap[name] = productMap[name] || { qty:0, revenue:0 };
+      productMap[name].qty += it.qty;
+      productMap[name].revenue += it.qty * Number(it.price||0);
+    });
+  });
+  var topProducts = Object.keys(productMap).map(function(name){
+    return { name:name, qty:productMap[name].qty, revenue:productMap[name].revenue };
+  }).sort(function(a,b){ return b.qty-a.qty; }).slice(0,5);
+
+  return { totalSales:totalSales, transCount:transCount, avg:avg, byMethod:byMethod, byType:byType, topProducts:topProducts };
+}
+
+function laporanPeriodLabel(){
+  var r = state.laporan;
+  if(r.filterType==="harian"){
+    return new Date(r.date+"T00:00:00").toLocaleDateString("id-ID", {day:"numeric", month:"long", year:"numeric"});
+  }
+  var parts = r.month.split("-");
+  return new Date(Number(parts[0]), Number(parts[1])-1, 1).toLocaleDateString("id-ID", {month:"long", year:"numeric"});
+}
+
+function renderLaporan(){
+  var r = state.laporan;
+  if(!r.loaded && !r.loading) loadLaporan();
+
+  var filterBtns = ["harian","bulanan"].map(function(f){
+    var lbl = f==="harian" ? "Harian" : "Bulanan";
+    var active = r.filterType === f;
+    return '<button data-laporan-filter="'+f+'" style="border:none;border-radius:8px;padding:8px 14px;font-size:12.5px;font-weight:600;background:'+(active?"#fff":"transparent")+';box-shadow:'+(active?"0 1px 3px rgba(0,0,0,0.08)":"none")+';color:'+(active?"var(--ink)":"var(--muted)")+';">'+lbl+'</button>';
+  }).join("");
+
+  var filterInput = r.filterType==="harian"
+    ? '<input type="date" id="laporan-date-input" value="'+esc(r.date)+'" style="border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12.5px;"/>'
+    : '<input type="month" id="laporan-month-input" value="'+esc(r.month)+'" style="border:1px solid var(--border);border-radius:9px;padding:8px 11px;font-size:12.5px;"/>';
+
+  var html = '<div class="card" style="padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'+
+    '<div style="display:flex;gap:6px;background:#F1EDE6;border-radius:10px;padding:4px;">'+filterBtns+'</div>'+
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'+filterInput+
+    '<button class="btn btn-outline" data-laporan-print '+(r.printBusy?"disabled":"")+'>'+ICONS.trend(14)+(r.printBusy?"Mencetak...":"Cetak Laporan")+'</button>'+
+    '<button class="btn btn-dark" data-laporan-pdf '+(r.pdfBusy?"disabled":"")+'>'+ICONS.plus(14)+(r.pdfBusy?"Membuat PDF...":"Download PDF")+'</button>'+
+    '</div></div>';
+
+  if(r.loading && !r.loaded){
+    html += '<div class="card" style="padding:40px;text-align:center;color:var(--muted);">Memuat laporan...</div>';
+    return html;
+  }
+  if(r.error){
+    html += '<div class="card" style="padding:40px;text-align:center;color:var(--red);">'+esc(r.error)+'</div>';
+    return html;
+  }
+
+  var s = laporanSummary();
+
+  html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:16px;">';
+  html += statCard("Total Penjualan", fmtRp(s.totalSales), laporanPeriodLabel(), true, "trend","#FBEDEC","#E63946");
+  html += statCard("Jumlah Transaksi", String(s.transCount), "transaksi selesai", true, "cashier","#FFF1E0","#FF8A00");
+  html += statCard("Rata-rata / Transaksi", fmtRp(s.avg), "per transaksi", true, "box","#EFECE6","#0D0D0D");
+  html += '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">';
+
+  html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:12px;">Metode Pembayaran</div>';
+  var methodKeys = Object.keys(s.byMethod);
+  if(methodKeys.length===0){
+    html += '<div style="font-size:12.5px;color:var(--muted);">Belum ada transaksi.</div>';
+  } else {
+    methodKeys.forEach(function(m){
+      var v = s.byMethod[m];
+      var pct = s.totalSales>0 ? Math.round(v.total/s.totalSales*100) : 0;
+      html += '<div style="margin-bottom:10px;"><div class="row-between" style="font-size:12.5px;margin-bottom:4px;"><span style="text-transform:capitalize;font-weight:600;">'+esc(m)+' <span style="color:var(--muted);font-weight:400;">('+v.count+'x)</span></span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(v.total)+'</span></div>'+
+        '<div style="height:6px;background:#F1EDE6;border-radius:4px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:var(--red);"></div></div></div>';
+    });
+  }
+  html += '</div>';
+
+  html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:12px;">Take Away vs Dine In</div>';
+  ["takeaway","dinein"].forEach(function(t){
+    var v = s.byType[t];
+    var pct = s.totalSales>0 ? Math.round(v.total/s.totalSales*100) : 0;
+    html += '<div style="margin-bottom:10px;"><div class="row-between" style="font-size:12.5px;margin-bottom:4px;"><span style="font-weight:600;">'+(t==="takeaway"?"Take Away":"Dine In")+' <span style="color:var(--muted);font-weight:400;">('+v.count+'x)</span></span><span style="font-family:JetBrains Mono,monospace;">'+fmtRp(v.total)+'</span></div>'+
+      '<div style="height:6px;background:#F1EDE6;border-radius:4px;overflow:hidden;"><div style="height:100%;width:'+pct+'%;background:#FF8A00;"></div></div></div>';
+  });
+  html += '</div>';
+
+  html += '</div>';
+
+  html += '<div class="card" style="padding:0;overflow:hidden;">';
+  html += '<div style="padding:18px 20px 6px;"><div class="section-title">Produk Terlaris</div></div>';
+  if(s.topProducts.length===0){
+    html += '<div style="padding:0 20px 20px;font-size:12.5px;color:var(--muted);">Belum ada produk terjual pada periode ini.</div>';
+  } else {
+    html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="text-align:left;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;">'+
+      '<th style="padding:10px 20px;">Produk</th><th style="padding:10px;">Qty Terjual</th><th style="padding:10px 20px;text-align:right;">Omzet</th></tr></thead><tbody>'+
+      s.topProducts.map(function(p){
+        return '<tr style="border-top:1px solid var(--border);font-size:12.5px;"><td style="padding:10px 20px;font-weight:600;">'+esc(p.name)+'</td><td style="padding:10px;">'+p.qty+'</td><td style="padding:10px 20px;text-align:right;font-family:JetBrains Mono,monospace;">'+fmtRp(p.revenue)+'</td></tr>';
+      }).join("")+
+      '</tbody></table>';
+  }
+  html += '</div>';
+  return html;
+}
+
+async function buildLaporanReceiptBytes(){
+  var W = state.printer.paperWidth || 32;
+  var rs = getReceiptSettings();
+  var s = laporanSummary();
+  var lines = [];
+  lines.push(centerLine((state.outlet && state.outlet.name) || "POSIVO", W));
+  lines.push(centerLine("LAPORAN PENJUALAN", W));
+  lines.push(centerLine(laporanPeriodLabel(), W));
+  lines.push("-".repeat(W));
+  lines.push(padRight("Dicetak", W-new Date().toLocaleString("id-ID",{dateStyle:"short",timeStyle:"short"}).length)+new Date().toLocaleString("id-ID",{dateStyle:"short",timeStyle:"short"}));
+  lines.push(padRight("Oleh", W-((state.profile&&state.profile.full_name)||"-").length)+((state.profile&&state.profile.full_name)||"-"));
+  lines.push("-".repeat(W));
+  lines.push(padRight("Total Penjualan", W-moneyShort(s.totalSales).length)+moneyShort(s.totalSales));
+  lines.push(padRight("Jumlah Transaksi", W-String(s.transCount).length)+String(s.transCount));
+  lines.push(padRight("Rata-rata/Transaksi", W-moneyShort(s.avg).length)+moneyShort(s.avg));
+  lines.push("-".repeat(W));
+  lines.push("METODE PEMBAYARAN");
+  Object.keys(s.byMethod).forEach(function(m){
+    var v = s.byMethod[m];
+    var label = m.charAt(0).toUpperCase()+m.slice(1)+" ("+v.count+"x)";
+    lines.push(padRight(label, W-moneyShort(v.total).length)+moneyShort(v.total));
+  });
+  lines.push("-".repeat(W));
+  lines.push("TAKE AWAY VS DINE IN");
+  lines.push(padRight("Take Away ("+s.byType.takeaway.count+"x)", W-moneyShort(s.byType.takeaway.total).length)+moneyShort(s.byType.takeaway.total));
+  lines.push(padRight("Dine In ("+s.byType.dinein.count+"x)", W-moneyShort(s.byType.dinein.total).length)+moneyShort(s.byType.dinein.total));
+  lines.push("-".repeat(W));
+  lines.push("PRODUK TERLARIS");
+  s.topProducts.forEach(function(p){
+    lines.push(asciiSafe(p.name));
+    lines.push(padRight(p.qty+" pcs", W-moneyShort(p.revenue).length)+moneyShort(p.revenue));
+  });
+  lines.push("-".repeat(W));
+  lines.push(centerLine("- Powered by Posivo -", W));
+  lines.push(""); lines.push(""); lines.push("");
+
+  var bytes = new TextEncoder().encode(lines.join("\n") + "\n");
+  var out = new Uint8Array(bytes.length + 2);
+  out.set(new Uint8Array([0x1B, 0x40]), 0);
+  out.set(bytes, 2);
+  return out;
+}
+
+async function handlePrintLaporan(){
+  if(!state.printer.connected){
+    alert("Printer belum tersambung. Sambungkan printer dulu di menu Pengaturan.");
+    return;
+  }
+  state.laporan.printBusy = true; renderApp();
+  try{
+    await sendToPrinter(await buildLaporanReceiptBytes());
+    state.toast = "Laporan berhasil dicetak";
+  }catch(err){
+    state.toast = "Gagal mencetak laporan: " + (err.message||err);
+  }
+  state.laporan.printBusy = false;
+  renderApp();
+  setTimeout(function(){ state.toast = null; renderApp(); }, 3200);
+}
+
+function handleDownloadLaporanPDF(){
+  if(!window.jspdf || !window.jspdf.jsPDF){
+    alert("Modul PDF belum siap, coba lagi sebentar.");
+    return;
+  }
+  state.laporan.pdfBusy = true; renderApp();
+  try{
+    var s = laporanSummary();
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
+    var y = 20;
+    var outletName = (state.outlet && state.outlet.name) || "Posivo";
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(16);
+    doc.text(outletName, 15, y); y += 7;
+    doc.setFontSize(12); doc.text("Laporan Penjualan — " + laporanPeriodLabel(), 15, y); y += 6;
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(120);
+    doc.text("Dicetak " + new Date().toLocaleString("id-ID",{dateStyle:"long",timeStyle:"short"}) + " oleh " + ((state.profile&&state.profile.full_name)||"-"), 15, y); y += 10;
+    doc.setTextColor(0);
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text("Ringkasan", 15, y); y += 6;
+    doc.setFont("helvetica","normal"); doc.setFontSize(10);
+    doc.text("Total Penjualan: " + fmtRp(s.totalSales), 15, y); y += 6;
+    doc.text("Jumlah Transaksi: " + s.transCount, 15, y); y += 6;
+    doc.text("Rata-rata / Transaksi: " + fmtRp(s.avg), 15, y); y += 10;
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text("Metode Pembayaran", 15, y); y += 6;
+    doc.setFont("helvetica","normal"); doc.setFontSize(10);
+    Object.keys(s.byMethod).forEach(function(m){
+      var v = s.byMethod[m];
+      doc.text(m.charAt(0).toUpperCase()+m.slice(1) + " (" + v.count + "x): " + fmtRp(v.total), 15, y); y += 6;
+    });
+    y += 4;
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text("Take Away vs Dine In", 15, y); y += 6;
+    doc.setFont("helvetica","normal"); doc.setFontSize(10);
+    doc.text("Take Away (" + s.byType.takeaway.count + "x): " + fmtRp(s.byType.takeaway.total), 15, y); y += 6;
+    doc.text("Dine In (" + s.byType.dinein.count + "x): " + fmtRp(s.byType.dinein.total), 15, y); y += 10;
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text("Produk Terlaris", 15, y); y += 7;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9);
+    doc.text("Produk", 15, y); doc.text("Qty", 130, y); doc.text("Omzet", 155, y); y += 5;
+    doc.setDrawColor(200); doc.line(15, y, 195, y); y += 5;
+    doc.setFont("helvetica","normal");
+    if(s.topProducts.length===0){
+      doc.text("Belum ada produk terjual pada periode ini.", 15, y); y += 6;
+    } else {
+      s.topProducts.forEach(function(p){
+        doc.text(String(p.name), 15, y);
+        doc.text(String(p.qty), 130, y);
+        doc.text(fmtRp(p.revenue), 155, y);
+        y += 6;
+      });
+    }
+
+    var fname = "laporan-" + outletName.toLowerCase().replace(/[^a-z0-9]+/g,"-") + "-" + (state.laporan.filterType==="harian"?state.laporan.date:state.laporan.month) + ".pdf";
+    doc.save(fname);
+  }catch(err){
+    alert("Gagal membuat PDF: " + (err.message||err));
+  }
+  state.laporan.pdfBusy = false;
+  renderApp();
 }
 
 /* ---------- Meja ---------- */
@@ -2059,6 +2341,7 @@ function renderApp(){
   else if(state.view==="riwayat") content = renderRiwayat();
   else if(state.view==="meja") content = renderMeja();
   else if(state.view==="produk") content = renderProduk();
+  else if(state.view==="laporan") content = renderLaporan();
   else if(state.view==="pengaturan") content = renderPengaturan();
   else content = renderDashboard();
 
@@ -2132,6 +2415,21 @@ root.addEventListener("click", function(e){
     loadRiwayat();
     return;
   }
+
+  var laporanFilterBtn = e.target.closest("[data-laporan-filter]");
+  if(laporanFilterBtn){
+    state.laporan.filterType = laporanFilterBtn.getAttribute("data-laporan-filter");
+    state.laporan.loaded = false;
+    renderApp();
+    loadLaporan();
+    return;
+  }
+
+  var laporanPrintBtn = e.target.closest("[data-laporan-print]");
+  if(laporanPrintBtn && !laporanPrintBtn.disabled){ handlePrintLaporan(); return; }
+
+  var laporanPdfBtn = e.target.closest("[data-laporan-pdf]");
+  if(laporanPdfBtn && !laporanPdfBtn.disabled){ handleDownloadLaporanPDF(); return; }
 
   var catTab = e.target.closest("[data-kasir-cat]");
   if(catTab){ state.kasir.cat = catTab.getAttribute("data-kasir-cat"); renderApp(); return; }
@@ -2258,6 +2556,8 @@ root.addEventListener("change", function(e){
   if(e.target.id === "riwayat-date-input"){ state.riwayat.date = e.target.value; loadRiwayat(); }
   if(e.target.id === "riwayat-month-input"){ state.riwayat.month = e.target.value; loadRiwayat(); }
   if(e.target.id === "riwayat-year-input"){ state.riwayat.year = Number(e.target.value); loadRiwayat(); }
+  if(e.target.id === "laporan-date-input"){ state.laporan.date = e.target.value; state.laporan.loaded = false; loadLaporan(); }
+  if(e.target.id === "laporan-month-input"){ state.laporan.month = e.target.value; state.laporan.loaded = false; loadLaporan(); }
 });
 
 root.addEventListener("input", function(e){
