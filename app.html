@@ -299,6 +299,7 @@ var STATUS_META = {
 };
 var CYCLE = ["kosong","terisi","kotor"];
 var THUMB_COLORS = ["#8B5E34","#3B2A21","#6F4E37","#5C8A3A","#6B3A2A","#7A5C9E","#C4501C","#D68A2C","#B5432C","#D3A02C","#8A5A2E","#C98A2E","#A8781E","#2E7BA6"];
+var METHOD_COLORS = { qris:"#E63946", tunai:"#FF8A00", kartu:"#0D0D0D", transfer:"#B7AFA5", lainnya:"#B7AFA5" };
 
 function fmtRp(n){ return "Rp " + Number(n||0).toLocaleString("id-ID"); }
 function pad2(n){ return String(n).length<2 ? "0"+n : String(n); }
@@ -560,6 +561,7 @@ var state = {
   todaySales: 0,
   todayTransCount: 0,
   recentOrders: [],
+  dashboardPeriod: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
   kasirManager: { list:[], loading:false, loaded:false, error:null, modalOpen:false, mode:"add", editId:null, form:{fullName:"",email:"",password:""}, busy:false, formError:null, upgradeInfoOpen:false },
   produkModal: { open:false, mode:"add", id:null, name:"", price:"", stock:"", category:"", imageFile:null, imagePreviewUrl:"", existingImageUrl:"", busy:false, error:null },
   printer: { device:null, characteristic:null, connected:false, name:"", paperWidth:32, busy:false, error:null },
@@ -824,10 +826,11 @@ function renderTopbar(){
 }
 
 /* ---------- Dashboard ---------- */
-function chartSVG(){
-  var points = [42,58,49,66,72,60,78,85,74,90,96,88];
+function chartSVG(points){
+  points = (points && points.length>1) ? points : [0,0];
   var w=560, h=170, pad=10;
   var max = Math.max.apply(null, points), min = Math.min.apply(null, points);
+  if(max===min){ max = min+1; }
   var step = (w-pad*2)/(points.length-1);
   var coords = points.map(function(p,i){
     var x = pad + i*step;
@@ -846,13 +849,8 @@ function chartSVG(){
     '</svg>';
 }
 
-function donutSVG(){
-  var data = [
-    {label:"QRIS", val:42, color:"#E63946"},
-    {label:"Tunai", val:28, color:"#FF8A00"},
-    {label:"Kartu", val:18, color:"#0D0D0D"},
-    {label:"Transfer", val:12, color:"#B7AFA5"}
-  ];
+function donutSVG(data){
+  data = (data && data.length>0) ? data : [{label:"Belum ada data", val:100, color:"#EEEBE5"}];
   var acc=0, r=52, cx=60, cy=60, sw=16;
   var circ = 2*Math.PI*r;
   var circles = data.map(function(d){
@@ -863,9 +861,91 @@ function donutSVG(){
     return '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+d.color+'" stroke-width="'+sw+'" stroke-dasharray="'+dash+' '+(circ-dash)+'" stroke-dashoffset="'+offset+'" transform="rotate(-90 '+cx+' '+cy+')"/>';
   }).join("");
   var legend = data.map(function(d){
-    return '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;"><span style="width:9px;height:9px;border-radius:3px;background:'+d.color+';display:inline-block;"></span><span style="color:var(--muted);width:58px;">'+d.label+'</span><span style="font-family:JetBrains Mono,monospace;font-weight:600;">'+d.val+'%</span></div>';
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:12.5px;"><span style="width:9px;height:9px;border-radius:3px;background:'+d.color+';display:inline-block;flex-shrink:0;"></span><span style="color:var(--muted);min-width:58px;">'+esc(d.label)+'</span><span style="font-family:JetBrains Mono,monospace;font-weight:600;">'+d.val+'%</span></div>';
   }).join("");
   return '<div style="display:flex;align-items:center;gap:18px;"><svg width="120" height="120" viewBox="0 0 120 120">'+circles+'<circle cx="'+cx+'" cy="'+cy+'" r="'+(r-sw/2-3)+'" fill="#fff"/></svg><div style="display:flex;flex-direction:column;gap:9px;">'+legend+'</div></div>';
+}
+
+async function loadDashboardPeriod(){
+  if(!state.profile) return;
+  var dp = state.dashboardPeriod;
+  dp.loading = true; renderApp();
+
+  var start, end;
+  if(dp.filterType === "harian"){
+    start = new Date(dp.date+"T00:00:00");
+    end = new Date(start); end.setDate(end.getDate()+1);
+  } else if(dp.filterType === "bulanan"){
+    var parts = dp.month.split("-");
+    start = new Date(Number(parts[0]), Number(parts[1])-1, 1);
+    end = new Date(Number(parts[0]), Number(parts[1]), 1);
+  } else {
+    start = new Date(Number(dp.year), 0, 1);
+    end = new Date(Number(dp.year)+1, 0, 1);
+  }
+
+  var { data, error } = await sb.from("orders")
+    .select("id,total,status,created_at,payments(method)")
+    .eq("outlet_id", state.profile.outlet_id)
+    .gte("created_at", start.toISOString())
+    .lt("created_at", end.toISOString())
+    .order("created_at", { ascending:true });
+
+  dp.loading = false;
+  if(error){ dp.error = error.message; renderApp(); return; }
+  dp.orders = data || [];
+  dp.loaded = true;
+  renderApp();
+}
+
+function dashboardPeriodLabel(){
+  var dp = state.dashboardPeriod;
+  if(dp.filterType==="harian"){
+    var isToday = dp.date === localISODate();
+    return isToday ? "Hari Ini" : new Date(dp.date+"T00:00:00").toLocaleDateString("id-ID",{day:"numeric",month:"long",year:"numeric"});
+  }
+  if(dp.filterType==="bulanan"){
+    var parts = dp.month.split("-");
+    return new Date(Number(parts[0]),Number(parts[1])-1,1).toLocaleDateString("id-ID",{month:"long",year:"numeric"});
+  }
+  return String(dp.year);
+}
+
+function dashboardSummary(){
+  var dp = state.dashboardPeriod;
+  var valid = dp.orders.filter(function(o){ return o.status==="selesai"; });
+  var totalSales = valid.reduce(function(s,o){ return s+Number(o.total||0); }, 0);
+  var transCount = valid.length;
+
+  var byMethod = {};
+  valid.forEach(function(o){
+    var m = (o.payments && o.payments[0]) ? o.payments[0].method : "lainnya";
+    byMethod[m] = (byMethod[m]||0) + Number(o.total||0);
+  });
+  var methodList = Object.keys(byMethod).map(function(m){
+    var pct = totalSales>0 ? Math.round(byMethod[m]/totalSales*100) : 0;
+    return { label: m.charAt(0).toUpperCase()+m.slice(1), val: pct, color: METHOD_COLORS[m]||"#B7AFA5" };
+  }).sort(function(a,b){ return b.val-a.val; });
+
+  var buckets, keys;
+  if(dp.filterType==="harian"){
+    buckets = {}; keys = [];
+    for(var h=0; h<24; h++){ buckets[h]=0; keys.push(h); }
+    valid.forEach(function(o){ var h=new Date(o.created_at).getHours(); buckets[h]+=Number(o.total||0); });
+  } else if(dp.filterType==="bulanan"){
+    var parts = dp.month.split("-");
+    var daysInMonth = new Date(Number(parts[0]), Number(parts[1]), 0).getDate();
+    buckets = {}; keys = [];
+    for(var d=1; d<=daysInMonth; d++){ buckets[d]=0; keys.push(d); }
+    valid.forEach(function(o){ var dd=new Date(o.created_at).getDate(); buckets[dd]+=Number(o.total||0); });
+  } else {
+    buckets = {}; keys = [];
+    for(var m2=0; m2<12; m2++){ buckets[m2]=0; keys.push(m2); }
+    valid.forEach(function(o){ var mm=new Date(o.created_at).getMonth(); buckets[mm]+=Number(o.total||0); });
+  }
+  var series = keys.map(function(k){ return buckets[k]; });
+
+  return { totalSales:totalSales, transCount:transCount, methodList:methodList, series:series };
 }
 
 function statCard(label, value, delta, up, iconKey, iconBg, iconColor){
@@ -879,23 +959,56 @@ function renderDashboard(){
   var mejaAktif = state.tables.filter(function(t){ return t.status!=="kosong"; }).length;
   var kasirView = isKasir();
 
-  var html = '<div style="display:grid;grid-template-columns:repeat('+(kasirView?3:4)+',1fr);gap:16px;margin-bottom:20px;">';
-  html += statCard("Penjualan Hari Ini", fmtRp(state.todaySales), state.todayTransCount+" transaksi hari ini", true, "trend","#FBEDEC","#E63946");
-  html += statCard("Transaksi", String(state.todayTransCount), state.todayTransCount>0?"hari ini":"Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
-  if(!kasirView){
-    html += statCard("Produk Aktif", String(state.products.length), state.products.length+" item terdaftar", true, "box","#EFECE6","#0D0D0D");
-  }
-  html += statCard("Meja Aktif", mejaAktif+" / "+state.tables.length, "real-time dari Supabase", true, "table","#EFECE6","#0D0D0D");
-  html += '</div>';
-
   if(kasirView){
+    var html = '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:20px;">';
+    html += statCard("Penjualan Hari Ini", fmtRp(state.todaySales), state.todayTransCount+" transaksi hari ini", true, "trend","#FBEDEC","#E63946");
+    html += statCard("Transaksi", String(state.todayTransCount), state.todayTransCount>0?"hari ini":"Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
+    html += statCard("Meja Aktif", mejaAktif+" / "+state.tables.length, "real-time dari Supabase", true, "table","#EFECE6","#0D0D0D");
+    html += '</div>';
     return html;
   }
 
+  var dp = state.dashboardPeriod;
+  if(!dp.loaded && !dp.loading) loadDashboardPeriod();
+
+  var filterBtns = ["harian","bulanan","tahunan"].map(function(f){
+    var lbl = f==="harian" ? "Harian" : (f==="bulanan" ? "Bulanan" : "Tahunan");
+    var active = dp.filterType===f;
+    return '<button data-dash-filter="'+f+'" style="border:none;border-radius:8px;padding:7px 13px;font-size:12.5px;font-weight:600;background:'+(active?"#fff":"transparent")+';box-shadow:'+(active?"0 1px 3px rgba(0,0,0,0.08)":"none")+';color:'+(active?"var(--ink)":"var(--muted)")+';">'+lbl+'</button>';
+  }).join("");
+  var curYear = new Date().getFullYear();
+  var yearOptions = "";
+  for(var y=curYear; y>=curYear-4; y--){ yearOptions += '<option value="'+y+'"'+(Number(dp.year)===y?" selected":"")+'>'+y+'</option>'; }
+  var filterInput;
+  if(dp.filterType==="harian"){
+    filterInput = '<input type="date" id="dash-date-input" value="'+esc(dp.date)+'" style="border:1px solid var(--border);border-radius:9px;padding:7px 10px;font-size:12.5px;"/>';
+  } else if(dp.filterType==="bulanan"){
+    filterInput = '<input type="month" id="dash-month-input" value="'+esc(dp.month)+'" style="border:1px solid var(--border);border-radius:9px;padding:7px 10px;font-size:12.5px;"/>';
+  } else {
+    filterInput = '<select id="dash-year-input" style="border:1px solid var(--border);border-radius:9px;padding:7px 10px;font-size:12.5px;">'+yearOptions+'</select>';
+  }
+
+  var html = '<div class="row-between" style="margin-bottom:14px;flex-wrap:wrap;gap:10px;">'+
+    '<div style="display:flex;gap:6px;background:#F1EDE6;border-radius:10px;padding:4px;">'+filterBtns+'</div>'+
+    filterInput+'</div>';
+
+  var s = dashboardSummary();
+  var isTodayView = dp.filterType==="harian" && dp.date===localISODate();
+
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">';
+  html += statCard(isTodayView?"Penjualan Hari Ini":"Penjualan ("+dashboardPeriodLabel()+")", fmtRp(s.totalSales), s.transCount+" transaksi", true, "trend","#FBEDEC","#E63946");
+  html += statCard("Transaksi", String(s.transCount), s.transCount>0?dashboardPeriodLabel():"Belum ada data",true,"cashier","#FFF1E0","#FF8A00");
+  html += statCard("Produk Aktif", String(state.products.length), state.products.length+" item terdaftar", true, "box","#EFECE6","#0D0D0D");
+  html += statCard("Meja Aktif", mejaAktif+" / "+state.tables.length, "real-time dari Supabase", true, "table","#EFECE6","#0D0D0D");
+  html += '</div>';
+
   html += '<div style="display:grid;grid-template-columns:1.6fr 1fr;gap:16px;margin-bottom:16px;">';
-  html += '<div class="card" style="padding:18px 20px;"><div class="row-between" style="margin-bottom:6px;"><div class="section-title">Grafik Penjualan</div><span class="pill pill-neutral">Contoh tampilan</span></div>'+
-    chartSVG()+'<div style="font-size:11px;color:var(--muted);margin-top:6px;">Grafik ini masih data contoh &mdash; akan dihitung dari transaksi asli setelah fitur laporan dibangun.</div></div>';
-  html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:12px;">Metode Pembayaran</div>'+donutSVG()+'<div style="font-size:11px;color:var(--muted);margin-top:10px;">Data contoh.</div></div>';
+  html += '<div class="card" style="padding:18px 20px;"><div class="row-between" style="margin-bottom:6px;"><div class="section-title">Grafik Penjualan</div><span class="pill pill-neutral">'+esc(dashboardPeriodLabel())+'</span></div>'+
+    (dp.loading ? '<div style="padding:40px;text-align:center;color:var(--muted);font-size:12.5px;">Memuat...</div>' : chartSVG(s.series))+
+    '<div style="font-size:11px;color:var(--muted);margin-top:6px;">Dihitung dari transaksi asli sesuai periode yang dipilih.</div></div>';
+  html += '<div class="card" style="padding:18px 20px;"><div class="section-title" style="margin-bottom:12px;">Metode Pembayaran</div>'+
+    (dp.loading ? '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12.5px;">Memuat...</div>' : donutSVG(s.methodList))+
+    '</div>';
   html += '</div>';
 
   var recentHtml;
@@ -1130,6 +1243,8 @@ async function handlePay(){
     k.selectedMeja = "";
     k.payMethod = "QRIS";
     refreshDashboardStats().then(renderApp);
+    var dp = state.dashboardPeriod;
+    if(dp.filterType==="harian" && dp.date===localISODate()){ dp.loaded = false; loadDashboardPeriod(); }
 
     if(state.printer.connected){
       try{
@@ -2425,6 +2540,15 @@ root.addEventListener("click", function(e){
     return;
   }
 
+  var dashFilterBtn = e.target.closest("[data-dash-filter]");
+  if(dashFilterBtn){
+    state.dashboardPeriod.filterType = dashFilterBtn.getAttribute("data-dash-filter");
+    state.dashboardPeriod.loaded = false;
+    renderApp();
+    loadDashboardPeriod();
+    return;
+  }
+
   var laporanPrintBtn = e.target.closest("[data-laporan-print]");
   if(laporanPrintBtn && !laporanPrintBtn.disabled){ handlePrintLaporan(); return; }
 
@@ -2558,6 +2682,9 @@ root.addEventListener("change", function(e){
   if(e.target.id === "riwayat-year-input"){ state.riwayat.year = Number(e.target.value); loadRiwayat(); }
   if(e.target.id === "laporan-date-input"){ state.laporan.date = e.target.value; state.laporan.loaded = false; loadLaporan(); }
   if(e.target.id === "laporan-month-input"){ state.laporan.month = e.target.value; state.laporan.loaded = false; loadLaporan(); }
+  if(e.target.id === "dash-date-input"){ state.dashboardPeriod.date = e.target.value; state.dashboardPeriod.loaded = false; loadDashboardPeriod(); }
+  if(e.target.id === "dash-month-input"){ state.dashboardPeriod.month = e.target.value; state.dashboardPeriod.loaded = false; loadDashboardPeriod(); }
+  if(e.target.id === "dash-year-input"){ state.dashboardPeriod.year = Number(e.target.value); state.dashboardPeriod.loaded = false; loadDashboardPeriod(); }
 });
 
 root.addEventListener("input", function(e){
