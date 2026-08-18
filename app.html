@@ -1844,8 +1844,8 @@ function renderProductModal(){
   if(!m || !m.open) return "";
   var previewSrc = m.imagePreviewUrl || m.existingImageUrl || "";
   var previewHtml = previewSrc
-    ? '<img src="'+esc(previewSrc)+'" style="width:100%;height:45px;object-fit:cover;border-radius:10px;margin-bottom:10px;"/>'
-    : '<div style="width:100%;height:45px;border-radius:10px;background:#F1EDE6;display:flex;align-items:center;justify-content:center;color:var(--muted-2);font-size:11px;margin-bottom:10px;">Belum ada foto</div>';
+    ? '<img src="'+esc(previewSrc)+'" style="width:64px;height:64px;object-fit:cover;border-radius:10px;flex-shrink:0;"/>'
+    : '<div style="width:64px;height:64px;border-radius:10px;background:#F1EDE6;display:flex;align-items:center;justify-content:center;color:var(--muted-2);font-size:9px;text-align:center;line-height:1.3;flex-shrink:0;">Belum ada foto</div>';
 
   return '<div class="modal-backdrop" data-modal-backdrop-produk>'+
     '<div class="modal-card" style="width:400px;text-align:left;">'+
@@ -1853,9 +1853,11 @@ function renderProductModal(){
     '<div class="section-title">'+(m.mode==="edit"?"Edit Produk":"Tambah Produk")+'</div>'+
     '<button data-close-produk-modal style="border:none;background:none;">'+ICONS.x(18)+'</button>'+
     '</div>'+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">'+
     previewHtml+
-    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Foto Produk</label>'+
-    '<input id="produk-modal-file" type="file" accept="image/*" style="width:100%;font-size:12px;margin-bottom:14px;"/>'+
+    '<div style="flex:1;min-width:0;"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Foto Produk</label>'+
+    '<input id="produk-modal-file" type="file" accept="image/*" style="width:100%;font-size:12px;"/></div>'+
+    '</div>'+
     '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Nama Produk</label>'+
     '<input id="produk-modal-name" value="'+esc(m.name)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="Contoh: Kopi Susu Gula Aren"/>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">'+
