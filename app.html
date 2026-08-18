@@ -220,7 +220,7 @@
   .meja-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:16px;}
   .meja-card{border-radius:16px; padding:16px 14px; cursor:pointer; transition:.15s; border:1.5px solid transparent; position:relative;}
   .meja-card:hover{transform:translateY(-2px);}
-  .meja-kosong{background:#fff; border-color:var(--border);}
+  .meja-kosong{background:#E8F5EC; border-color:#9FD8AE;}
   .meja-terisi{background:#FBEDEC; border-color:#F3C6C4;}
   .meja-kotor{background:#FDF3E2; border-color:#F2DBA6;}
   .meja-reserved{background:#F2EFEA; border-color:var(--muted-2); border-style:dashed;}
@@ -291,7 +291,7 @@ var ICONS = {
 
 /* ---------- Static reference data ---------- */
 var STATUS_META = {
-  kosong: {label:"Kosong", cls:"meja-kosong", dot:"#B7AFA5"},
+  kosong: {label:"Tersedia", cls:"meja-kosong", dot:"#1E8E5A"},
   terisi: {label:"Terisi", cls:"meja-terisi", dot:"#E63946"},
   kotor: {label:"Perlu Dibersihkan", cls:"meja-kotor", dot:"#FF8A00"},
   reserved: {label:"Dipesan", cls:"meja-reserved", dot:"#0D0D0D"}
@@ -553,7 +553,7 @@ var state = {
   tables: [],
   kasir: { cat: "Semua", cart: [], payMethod: "QRIS", selectedMeja: "", orderType: "takeaway", customerName: "", cashReceived: "" },
   produk: { query: "", cat: "Semua", cursor: 0 },
-  meja: { activeModal: null },
+  meja: { activeModal: null, formOpen:false, form:{ label:"", area:"Indoor", capacity:"" }, formError:null, busy:false },
   riwayat: { filterType:"harian", date: localISODate(), month: localISOMonth(), year: new Date().getFullYear(), orders: [], loading:false, loaded:false, error:null },
   todaySales: 0,
   todayTransCount: 0,
@@ -815,7 +815,7 @@ function renderTopbar(){
   var now = new Date();
   var dateStr = now.toLocaleDateString("id-ID", {weekday:"long", day:"numeric", month:"long"});
   var timeStr = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
-  var rightBtn = (state.view==="kasir"||state.view==="pengaturan"||state.view==="riwayat") ? "" : '<button class="btn btn-dark">'+ICONS.plus(14)+(state.view==="produk"?"Ekspor":"Aksi Cepat")+'</button>';
+  var rightBtn = state.view==="produk" ? '<button class="btn btn-dark">'+ICONS.plus(14)+"Ekspor"+'</button>' : "";
   return '<div class="topbar"><div><div class="page-title">'+m.title+'</div><div class="page-sub">'+m.sub+'</div></div>'+
     '<div class="topbar-right">'+trialBadge()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
 }
@@ -969,9 +969,11 @@ function renderKasir(){
     }).join("");
   }
 
-  var mejaOptions = state.tables.map(function(t){
-    return '<option value="'+t.id+'"'+(String(k.selectedMeja)===String(t.id)?" selected":"")+'>'+esc(t.label)+'</option>';
-  }).join("");
+  var mejaOptions = state.tables.filter(function(t){
+    return t.status==="kosong" || String(t.id)===String(k.selectedMeja);
+  }).map(function(t){
+    return '<option value="'+t.id+'"'+(String(k.selectedMeja)===String(t.id)?" selected":"")+'>'+esc(t.label)+(t.status!=="kosong"?" (dipilih)":"")+'</option>';
+  }).join("") || '<option value="">Tidak ada meja tersedia</option>';
   var orderTypeSelect = '<select id="kasir-order-type" style="border:1px solid var(--border);border-radius:8px;padding:5px 8px;font-size:12px;font-weight:600;">'+
     '<option value="takeaway"'+(k.orderType==="takeaway"?" selected":"")+'>Take Away</option>'+
     '<option value="dinein"'+(k.orderType==="dinein"?" selected":"")+'>Dine In</option>'+
@@ -1092,6 +1094,9 @@ async function handlePay(){
 
     if(k.orderType==="dinein" && k.selectedMeja){
       await sb.from("tables").update({ status:"terisi" }).eq("id", k.selectedMeja);
+      state.tables = state.tables.map(function(t){
+        return String(t.id)===String(k.selectedMeja) ? Object.assign({}, t, { status:"terisi" }) : t;
+      });
     }
 
     var stockUpdates = k.cart.map(function(i){
@@ -1246,10 +1251,14 @@ function renderMeja(){
     return '<div class="legend-item"><span class="legend-dot" style="background:'+v.dot+';"></span>'+v.label+'</div>';
   }).join("");
 
-  var html = '<div class="table-legend">'+legend+'<div style="margin-left:auto;font-size:12px;color:var(--muted);">Klik meja untuk ubah status &middot; tersinkron real-time</div></div>';
+  var html = '<div class="table-legend">'+legend+'<div style="margin-left:auto;display:flex;align-items:center;gap:14px;">'+
+    '<span style="font-size:12px;color:var(--muted);">Klik meja untuk ubah status &middot; tersinkron real-time</span>'+
+    (isKasir() ? "" : '<button class="btn btn-primary" data-add-meja>'+ICONS.plus(14)+'Tambah Meja</button>')+
+    '</div></div>';
 
   if(state.tables.length===0){
     html += '<div class="card" style="padding:40px;text-align:center;color:var(--muted);">Belum ada meja terdaftar untuk outlet ini.</div>';
+    html += renderMejaFormModal();
     return html;
   }
 
@@ -1261,6 +1270,7 @@ function renderMeja(){
     list.forEach(function(t){
       var meta = STATUS_META[t.status] || STATUS_META.kosong;
       html += '<div class="card meja-card '+meta.cls+'" data-meja-id="'+t.id+'">'+
+        (isKasir() ? "" : '<button data-delete-meja="'+t.id+'" style="position:absolute;top:8px;right:8px;border:none;background:none;color:var(--muted);padding:2px;">'+ICONS.trash(13)+'</button>')+
         '<div class="row-between" style="align-items:flex-start;"><div><div class="meja-number">'+esc(t.label)+'</div><div class="meja-cap">'+(t.capacity||"-")+' kursi</div></div>'+
         '<span class="legend-dot" style="background:'+meta.dot+';margin-top:4px;"></span></div>'+
         '<div style="margin-top:12px;"><span class="pill pill-neutral" style="background:rgba(255,255,255,0.7);">'+meta.label+'</span></div></div>';
@@ -1281,7 +1291,75 @@ function renderMeja(){
         '</div></div>';
     }
   }
+
+  html += renderMejaFormModal();
   return html;
+}
+
+function renderMejaFormModal(){
+  var m = state.meja;
+  if(!m.formOpen) return "";
+  var f = m.form;
+  return '<div class="modal-backdrop" data-modal-backdrop-meja>'+
+    '<div class="modal-card" style="width:360px;text-align:left;">'+
+    '<div class="row-between" style="margin-bottom:14px;"><div class="section-title">Tambah Meja</div>'+
+    '<button data-close-meja-form style="border:none;background:none;">'+ICONS.x(18)+'</button></div>'+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">No. Meja</label>'+
+    '<input id="meja-form-label" value="'+esc(f.label)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;" placeholder="Contoh: Meja 5"/>'+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Area</label>'+
+    '<select id="meja-form-area" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:12px;">'+
+    '<option value="Indoor"'+(f.area==="Indoor"?" selected":"")+'>Indoor</option>'+
+    '<option value="Outdoor"'+(f.area==="Outdoor"?" selected":"")+'>Outdoor</option>'+
+    '</select>'+
+    '<label style="font-size:12px;font-weight:600;display:block;margin-bottom:5px;">Kapasitas (kursi)</label>'+
+    '<input id="meja-form-capacity" type="text" inputmode="numeric" value="'+esc(f.capacity)+'" style="width:100%;border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-size:13px;margin-bottom:16px;" placeholder="Contoh: 4"/>'+
+    (m.formError ? '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:8px 10px;border-radius:8px;margin-bottom:12px;">'+esc(m.formError)+'</div>' : '')+
+    '<div style="display:flex;gap:10px;">'+
+    '<button class="btn btn-outline" style="flex:1;justify-content:center;" data-close-meja-form>Cancel</button>'+
+    '<button class="btn btn-primary" style="flex:1;justify-content:center;" data-save-meja-form '+(m.busy?"disabled":"")+'>'+(m.busy?"Menyimpan...":"Simpan")+'</button>'+
+    '</div></div></div>';
+}
+
+function openAddMejaModal(){
+  state.meja.formOpen = true;
+  state.meja.form = { label:"", area:"Indoor", capacity:"" };
+  state.meja.formError = null;
+  renderApp();
+}
+
+function closeMejaFormModal(){
+  state.meja.formOpen = false;
+  renderApp();
+}
+
+async function handleSaveMeja(){
+  var m = state.meja;
+  var f = m.form;
+  if(!f.label.trim()){
+    m.formError = "No. Meja wajib diisi.";
+    renderApp(); return;
+  }
+  m.busy = true; m.formError = null; renderApp();
+  var { data, error } = await sb.from("tables").insert({
+    outlet_id: state.profile.outlet_id,
+    label: f.label.trim(),
+    area: f.area,
+    capacity: f.capacity ? Number(f.capacity) : null,
+    status: "kosong"
+  }).select().single();
+  m.busy = false;
+  if(error){ m.formError = error.message; renderApp(); return; }
+  state.tables.push(data);
+  m.formOpen = false;
+  renderApp();
+}
+
+async function handleDeleteMeja(id){
+  if(!window.confirm("Hapus meja ini?")) return;
+  var { error } = await sb.from("tables").delete().eq("id", id);
+  if(error){ alert("Gagal menghapus meja: "+error.message); return; }
+  state.tables = state.tables.filter(function(t){ return t.id!==id; });
+  renderApp();
 }
 
 async function handleMejaClick(id){
@@ -1731,6 +1809,17 @@ function closeKasirModal(){
   renderApp();
 }
 
+async function edgeFunctionErrorMessage(error){
+  if(!error) return null;
+  try{
+    if(error.context && typeof error.context.json === "function"){
+      var body = await error.context.clone().json();
+      if(body && body.error) return body.error;
+    }
+  }catch(e){}
+  return error.message || "Terjadi kesalahan.";
+}
+
 async function handleSaveKasir(){
   var km = state.kasirManager;
   var f = km.form;
@@ -1749,7 +1838,7 @@ async function handleSaveKasir(){
     });
     km.busy = false;
     if(error || (data && data.error)){
-      km.formError = (data && data.error) || error.message || "Gagal membuat akun kasir.";
+      km.formError = (data && data.error) || await edgeFunctionErrorMessage(error) || "Gagal membuat akun kasir.";
       renderApp(); return;
     }
     km.modalOpen = false;
@@ -1765,7 +1854,7 @@ async function handleSaveKasir(){
         body: { id: km.editId, password: f.password }
       });
       if(pwErr || (pwData && pwData.error)){
-        km.formError = (pwData && pwData.error) || pwErr.message || "Nama tersimpan, tapi gagal reset password.";
+        km.formError = (pwData && pwData.error) || await edgeFunctionErrorMessage(pwErr) || "Nama tersimpan, tapi gagal reset password.";
         renderApp(); return;
       }
     }
@@ -1778,7 +1867,7 @@ async function deleteKasir(id){
   if(!window.confirm("Hapus akun kasir ini? Login-nya akan langsung dinonaktifkan.")) return;
   var { data, error } = await sb.functions.invoke("delete-kasir", { body: { id: id } });
   if(error || (data && data.error)){
-    alert("Gagal menghapus: " + ((data && data.error) || error.message));
+    alert("Gagal menghapus: " + ((data && data.error) || await edgeFunctionErrorMessage(error)));
     return;
   }
   await loadKasirList();
@@ -2083,6 +2172,22 @@ root.addEventListener("click", function(e){
   var saveProfileBtn = e.target.closest("[data-save-profile-settings]");
   if(saveProfileBtn && !saveProfileBtn.disabled){ handleSaveProfileSettings(); return; }
 
+  var addMejaBtn = e.target.closest("[data-add-meja]");
+  if(addMejaBtn){ openAddMejaModal(); return; }
+
+  var closeMejaFormBtn = e.target.closest("[data-close-meja-form]");
+  if(closeMejaFormBtn){ closeMejaFormModal(); return; }
+
+  var saveMejaFormBtn = e.target.closest("[data-save-meja-form]");
+  if(saveMejaFormBtn && !saveMejaFormBtn.disabled){ handleSaveMeja(); return; }
+
+  if(e.target.hasAttribute && e.target.hasAttribute("data-modal-backdrop-meja")){
+    closeMejaFormModal(); return;
+  }
+
+  var deleteMejaBtn = e.target.closest("[data-delete-meja]");
+  if(deleteMejaBtn){ handleDeleteMeja(deleteMejaBtn.getAttribute("data-delete-meja")); return; }
+
   var mejaCard = e.target.closest("[data-meja-id]");
   if(mejaCard){ handleMejaClick(mejaCard.getAttribute("data-meja-id")); return; }
 
@@ -2145,6 +2250,7 @@ root.addEventListener("change", function(e){
     if(state.kasir.orderType==="takeaway") state.kasir.selectedMeja = "";
     renderApp();
   }
+  if(e.target.id === "meja-form-area"){ state.meja.form.area = e.target.value; }
   if(e.target.id === "produk-cat-select"){ state.produk.cat = e.target.value; renderApp(); }
   if(e.target.id === "produk-modal-file"){ handleProductFileChange(e); }
   if(e.target.id === "receipt-logo-file"){ handleReceiptLogoFileChange(e); }
@@ -2181,6 +2287,14 @@ root.addEventListener("input", function(e){
   if(e.target.id === "kasir-modal-name" || e.target.id === "kasir-modal-email" || e.target.id === "kasir-modal-password"){
     var fmap = { "kasir-modal-name":"fullName", "kasir-modal-email":"email", "kasir-modal-password":"password" };
     state.kasirManager.form[fmap[e.target.id]] = e.target.value;
+    state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
+    renderApp();
+  }
+  if(e.target.id === "meja-form-label" || e.target.id === "meja-form-capacity"){
+    var mmap = { "meja-form-label":"label", "meja-form-capacity":"capacity" };
+    var val = e.target.value;
+    if(e.target.id === "meja-form-capacity") val = val.replace(/[^0-9]/g, "");
+    state.meja.form[mmap[e.target.id]] = val;
     state._focusField = { id: e.target.id, cursor: e.target.selectionStart };
     renderApp();
   }
