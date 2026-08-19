@@ -269,6 +269,13 @@
     .product-grid{overflow-y:visible;}
     .cart-items{flex:none; overflow-y:visible;}
 
+    /* Tabel (Produk, Riwayat, dsb) sering lebih lebar dari layar HP — kartu
+       pembungkusnya (.card) pakai overflow:hidden supaya sudutnya rapi di desktop,
+       tapi itu memotong kolom paling kanan (mis. "Aksi") kalau tabel melebar.
+       Izinkan geser horizontal khusus di mobile supaya kolom tersembunyi tetap terjangkau. */
+    .card{overflow-x:auto !important; -webkit-overflow-scrolling:touch;}
+    .table-wide{min-width:640px;}
+
     .bottom-nav{
       display:flex; position:fixed; left:0; right:0; bottom:0; z-index:70;
       background:var(--ink); border-top:1px solid #221F1C;
@@ -1449,7 +1456,7 @@ function renderRiwayat(){
   } else if(r.orders.length === 0){
     html += '<div style="padding:40px;text-align:center;color:var(--muted);">Belum ada transaksi pada periode ini.</div>';
   } else {
-    html += '<table style="width:100%;border-collapse:collapse;">'+
+    html += '<table class="table-wide" style="width:100%;border-collapse:collapse;">'+
       '<thead><tr style="text-align:left;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;">'+
       '<th style="padding:12px 18px;">Waktu</th><th style="padding:12px;">Meja</th><th style="padding:12px;">Item</th><th style="padding:12px;">Metode</th><th style="padding:12px;">Status</th><th style="padding:12px 18px;text-align:right;">Total</th></tr></thead><tbody>'+
       r.orders.map(function(o){
@@ -1908,7 +1915,7 @@ function renderProduk(){
     (canEdit ? '<button class="btn btn-primary" data-add-produk>'+ICONS.plus(15)+' Tambah Produk</button>' : '<span class="pill pill-neutral">Lihat saja</span>')+'</div>';
   html += '</div>';
 
-  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Pajak</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
+  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table class="table-wide"><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Pajak</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
 
   if(state.products.length===0){
     html += '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</td></tr>';
