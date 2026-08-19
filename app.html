@@ -250,6 +250,7 @@
   /* ---------- Mobile: bottom nav bar + "Lainnya" sheet ---------- */
   .bottom-nav{display:none;}
   .more-sheet-backdrop{display:none;}
+  .more-sheet{display:none;}
 
   @media (max-width: 880px){
     .app-shell{flex-direction:column; height:100dvh;}
@@ -257,6 +258,13 @@
     .content-scroll{padding-bottom:84px;}
     .topbar{padding:0 16px;}
     .content-pad{padding:16px 16px 28px;}
+
+    /* Kasir: matikan scroll internal grid/keranjang di mobile supaya seluruh
+       halaman (termasuk Total di footer keranjang) ikut scroll bersama halaman,
+       tidak terjebak di dalam kotak internal yang ketutup bottom nav. */
+    .pos-products{flex:none;}
+    .product-grid{overflow-y:visible;}
+    .cart-items{flex:none; overflow-y:visible;}
 
     .bottom-nav{
       display:flex; position:fixed; left:0; right:0; bottom:0; z-index:70;
@@ -277,7 +285,7 @@
     }
     .more-sheet-backdrop.is-open{opacity:1; pointer-events:auto;}
     .more-sheet{
-      position:fixed; left:0; right:0; bottom:0; z-index:80; background:var(--ink);
+      display:block; position:fixed; left:0; right:0; bottom:0; z-index:80; background:var(--ink);
       border-radius:18px 18px 0 0; padding:10px 10px calc(14px + env(safe-area-inset-bottom));
       transform:translateY(100%); transition:transform .22s cubic-bezier(.4,0,.2,1);
       max-height:70vh; overflow-y:auto;
