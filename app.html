@@ -246,6 +246,50 @@
     .pos-layout{flex-direction:column; height:auto;}
     .cart-panel{width:100%;}
   }
+
+  /* ---------- Mobile: bottom nav bar + "Lainnya" sheet ---------- */
+  .bottom-nav{display:none;}
+  .more-sheet-backdrop{display:none;}
+
+  @media (max-width: 880px){
+    .app-shell{flex-direction:column; height:100dvh;}
+    .sidebar{display:none;}
+    .content-scroll{padding-bottom:84px;}
+    .topbar{padding:0 16px;}
+    .content-pad{padding:16px 16px 28px;}
+
+    .bottom-nav{
+      display:flex; position:fixed; left:0; right:0; bottom:0; z-index:70;
+      background:var(--ink); border-top:1px solid #221F1C;
+      padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+    }
+    .bottom-nav-item{
+      flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+      padding:6px 2px; border:none; background:transparent; color:#B4AEA6; font-size:10.5px; font-weight:600;
+      border-radius:10px; min-width:0;
+    }
+    .bottom-nav-item span{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;}
+    .bottom-nav-item.active{color:#fff;}
+
+    .more-sheet-backdrop{
+      display:block; position:fixed; inset:0; background:rgba(13,13,13,0.45); z-index:75;
+      opacity:0; pointer-events:none; transition:opacity .18s ease;
+    }
+    .more-sheet-backdrop.is-open{opacity:1; pointer-events:auto;}
+    .more-sheet{
+      position:fixed; left:0; right:0; bottom:0; z-index:80; background:var(--ink);
+      border-radius:18px 18px 0 0; padding:10px 10px calc(14px + env(safe-area-inset-bottom));
+      transform:translateY(100%); transition:transform .22s cubic-bezier(.4,0,.2,1);
+      max-height:70vh; overflow-y:auto;
+    }
+    .more-sheet.is-open{transform:translateY(0);}
+    .more-sheet-handle{width:36px; height:4px; border-radius:3px; background:#3A3733; margin:4px auto 12px;}
+    .more-sheet-label{color:#6B6560; font-size:10.5px; letter-spacing:0.09em; text-transform:uppercase; font-weight:600; padding:6px 10px;}
+    .more-sheet .nav-item{color:#B4AEA6;}
+    .more-sheet .nav-item.active{background:#1B1A18; color:#fff;}
+    .more-sheet .nav-item.active::before{display:none;}
+    .more-sheet .nav-item.is-soon{opacity:.55; cursor:default;}
+  }
 </style>
 </head>
 <body>
@@ -287,7 +331,8 @@ var ICONS = {
   trash: function(s){ return svgIcon('<path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a1 1 0 01-1 1H7a1 1 0 01-1-1L5 6"/>', s); },
   edit: function(s){ return svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>', s); },
   logout: function(s){ return svgIcon('<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>', s); },
-  history: function(s){ return svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>', s); }
+  history: function(s){ return svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>', s); },
+  more: function(s){ return svgIcon('<circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>', s); }
 };
 
 /* ---------- Static reference data ---------- */
@@ -571,6 +616,7 @@ var state = {
   toast: null,
   busy: false,
   sidebarPinned: false,
+  moreSheetOpen: false,
   _focusSearch: false
 };
 
@@ -794,6 +840,49 @@ function renderSidebar(){
     '<button data-logout title="Keluar" style="border:none;background:none;color:#8A8580;flex-shrink:0;">'+ICONS.logout(15)+'</button>'+
     '</div></div>';
   html += '</aside>';
+  return html;
+}
+
+function renderBottomNav(){
+  var primary = [
+    {key:"dashboard", label:"Dashboard", icon:"dashboard"},
+    {key:"kasir", label:"Kasir", icon:"cashier"},
+    {key:"riwayat", label:"Riwayat", icon:"history"},
+    {key:"produk", label:"Produk", icon:"box"}
+  ];
+  var primaryKeys = primary.map(function(it){ return it.key; });
+  var moreActive = primaryKeys.indexOf(state.view) === -1;
+
+  var moreItems = [
+    {key:"meja", label:"Meja", icon:"table"},
+    {key:"laporan", label:"Laporan", icon:"report"}
+  ];
+  if(!isKasir()) moreItems.push({key:"pengaturan", label:"Pengaturan", icon:"settings"});
+  var soon = [
+    {key:"qr", label:"QR Ordering", icon:"qr"},
+    {key:"pelanggan", label:"Pelanggan", icon:"users"}
+  ];
+
+  var html = '<nav class="bottom-nav">';
+  primary.forEach(function(it){
+    html += '<button class="bottom-nav-item'+(state.view===it.key?" active":"")+'" data-nav="'+it.key+'">'+ICONS[it.icon](19)+'<span>'+it.label+'</span></button>';
+  });
+  html += '<button class="bottom-nav-item'+(moreActive?" active":"")+'" data-more-toggle>'+ICONS.more(19)+'<span>Lainnya</span></button>';
+  html += '</nav>';
+
+  html += '<div class="more-sheet-backdrop'+(state.moreSheetOpen?" is-open":"")+'" data-more-backdrop></div>';
+  html += '<div class="more-sheet'+(state.moreSheetOpen?" is-open":"")+'">';
+  html += '<div class="more-sheet-handle"></div>';
+  html += '<div class="more-sheet-label">Menu Lainnya</div>';
+  moreItems.forEach(function(it){
+    html += '<button class="nav-item'+(state.view===it.key?" active":"")+'" data-nav="'+it.key+'">'+ICONS[it.icon](17)+'<span>'+it.label+'</span></button>';
+  });
+  html += '<div class="more-sheet-label">Segera Hadir</div>';
+  soon.forEach(function(it){
+    html += '<button class="nav-item is-soon" title="'+it.label+' — Segera hadir">'+ICONS[it.icon](17)+'<span>'+it.label+'</span></button>';
+  });
+  html += '</div>';
+
   return html;
 }
 
@@ -2488,7 +2577,7 @@ function renderApp(){
     '<div style="flex:1;display:flex;flex-direction:column;min-width:0;">'+
     renderTopbar()+
     '<div class="content-scroll"><div class="content-pad">'+content+'</div></div>'+
-    '</div></div>';
+    '</div>'+renderBottomNav()+'</div>';
 
   if(state._focusSearch){
     var inp = document.getElementById("produk-search");
@@ -2530,6 +2619,12 @@ root.addEventListener("click", function(e){
   var sidebarToggle = e.target.closest("[data-sidebar-toggle]");
   if(sidebarToggle){ state.sidebarPinned = !state.sidebarPinned; renderApp(); return; }
 
+  var moreToggleBtn = e.target.closest("[data-more-toggle]");
+  if(moreToggleBtn){ state.moreSheetOpen = !state.moreSheetOpen; renderApp(); return; }
+
+  var moreBackdrop = e.target.closest("[data-more-backdrop]");
+  if(moreBackdrop){ state.moreSheetOpen = false; renderApp(); return; }
+
   var logoutBtn = e.target.closest("[data-logout]");
   if(logoutBtn){ sb.auth.signOut(); return; }
 
@@ -2542,6 +2637,7 @@ root.addEventListener("click", function(e){
   var navBtn = e.target.closest("[data-nav]");
   if(navBtn){
     state.view = navBtn.getAttribute("data-nav");
+    state.moreSheetOpen = false;
     renderApp();
     if(state.view==="riwayat") loadRiwayat();
     return;
