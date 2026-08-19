@@ -253,15 +253,18 @@
   .more-sheet{display:none;}
 
   @media (max-width: 880px){
-    .app-shell{flex-direction:column; height:100dvh;}
+    /* Lepas dari pola "kotak scroll bersarang" ala desktop (app-shell overflow:hidden +
+       content-scroll flex:1 overflow-y:auto). Di HP kita biarkan seluruh HALAMAN yang
+       scroll secara natural — jauh lebih stabil lintas browser mobile. */
+    html, body, #root{height:auto; min-height:100%;}
+    .app-shell{display:block; height:auto; overflow:visible;}
     .sidebar{display:none;}
-    .content-scroll{padding-bottom:84px;}
+    .content-scroll{display:block; height:auto; overflow:visible; flex:none; padding-bottom:84px;}
     .topbar{padding:0 16px;}
     .content-pad{padding:16px 16px 28px;}
 
-    /* Kasir: matikan scroll internal grid/keranjang di mobile supaya seluruh
-       halaman (termasuk Total di footer keranjang) ikut scroll bersama halaman,
-       tidak terjebak di dalam kotak internal yang ketutup bottom nav. */
+    /* Kasir: matikan juga scroll internal grid/keranjang, biar semuanya ikut
+       scroll bersama halaman (termasuk Total di footer keranjang). */
     .pos-products{flex:none;}
     .product-grid{overflow-y:visible;}
     .cart-items{flex:none; overflow-y:visible;}
