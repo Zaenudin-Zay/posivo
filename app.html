@@ -252,6 +252,9 @@
   .more-sheet-backdrop{display:none;}
   .more-sheet{display:none;}
 
+  /* Produk: tabel di desktop, kartu (dengan Edit/Hapus langsung terlihat) di HP */
+  .produk-mobile-list{display:none;}
+
   @media (max-width: 880px){
     /* Lepas dari pola "kotak scroll bersarang" ala desktop (app-shell overflow:hidden +
        content-scroll flex:1 overflow-y:auto). Di HP kita biarkan seluruh HALAMAN yang
@@ -263,18 +266,15 @@
     .topbar{padding:0 16px;}
     .content-pad{padding:16px 16px 28px;}
 
+    .produk-table-wrap{display:none;}
+    .produk-mobile-list{display:flex; flex-direction:column; gap:10px;}
+    .produk-mobile-card{padding:12px;}
+
     /* Kasir: matikan juga scroll internal grid/keranjang, biar semuanya ikut
        scroll bersama halaman (termasuk Total di footer keranjang). */
     .pos-products{flex:none;}
     .product-grid{overflow-y:visible;}
     .cart-items{flex:none; overflow-y:visible;}
-
-    /* Tabel (Produk, Riwayat, dsb) sering lebih lebar dari layar HP — kartu
-       pembungkusnya (.card) pakai overflow:hidden supaya sudutnya rapi di desktop,
-       tapi itu memotong kolom paling kanan (mis. "Aksi") kalau tabel melebar.
-       Izinkan geser horizontal khusus di mobile supaya kolom tersembunyi tetap terjangkau. */
-    .card{overflow-x:auto !important; -webkit-overflow-scrolling:touch;}
-    .table-wide{min-width:640px;}
 
     .bottom-nav{
       display:flex; position:fixed; left:0; right:0; bottom:0; z-index:70;
@@ -1456,7 +1456,7 @@ function renderRiwayat(){
   } else if(r.orders.length === 0){
     html += '<div style="padding:40px;text-align:center;color:var(--muted);">Belum ada transaksi pada periode ini.</div>';
   } else {
-    html += '<table class="table-wide" style="width:100%;border-collapse:collapse;">'+
+    html += '<table style="width:100%;border-collapse:collapse;">'+
       '<thead><tr style="text-align:left;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;">'+
       '<th style="padding:12px 18px;">Waktu</th><th style="padding:12px;">Meja</th><th style="padding:12px;">Item</th><th style="padding:12px;">Metode</th><th style="padding:12px;">Status</th><th style="padding:12px 18px;text-align:right;">Total</th></tr></thead><tbody>'+
       r.orders.map(function(o){
@@ -1915,7 +1915,7 @@ function renderProduk(){
     (canEdit ? '<button class="btn btn-primary" data-add-produk>'+ICONS.plus(15)+' Tambah Produk</button>' : '<span class="pill pill-neutral">Lihat saja</span>')+'</div>';
   html += '</div>';
 
-  html += '<div class="card" style="padding:6px 6px 4px;overflow:hidden;"><table class="table-wide"><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Pajak</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
+  html += '<div class="produk-table-wrap card" style="padding:6px 6px 4px;overflow:hidden;"><table><thead><tr><th>Produk</th><th>Kategori</th><th>Harga</th><th>Pajak</th><th>Stok</th><th>Status</th>'+(canEdit?'<th style="text-align:right;padding-right:16px;">Aksi</th>':'')+'</tr></thead><tbody>';
 
   if(state.products.length===0){
     html += '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted);">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</td></tr>';
@@ -1942,6 +1942,43 @@ function renderProduk(){
     });
   }
   html += '</tbody></table></div>';
+
+  /* Tampilan kartu khusus HP: sama datanya, tapi tombol Edit/Hapus langsung
+     terlihat tanpa perlu geser tabel ke samping. */
+  html += '<div class="produk-mobile-list">';
+  if(state.products.length===0){
+    html += '<div class="card" style="padding:30px;text-align:center;color:var(--muted);font-size:13px;">Belum ada produk'+(canEdit?'. Klik "Tambah Produk" untuk mulai mengisi katalog.':'.')+'</div>';
+  } else if(filtered.length===0){
+    html += '<div class="card" style="padding:30px;text-align:center;color:var(--muted);font-size:13px;">Tidak ada produk yang cocok.</div>';
+  } else {
+    filtered.forEach(function(p){
+      var stok2 = p.stock==null?0:p.stock;
+      var statusPill2;
+      if(stok2===0) statusPill2 = '<span class="pill pill-bad"><span class="pill-dot"></span>Habis</span>';
+      else if(stok2<15) statusPill2 = '<span class="pill pill-warn"><span class="pill-dot"></span>Stok Menipis</span>';
+      else statusPill2 = '<span class="pill pill-good"><span class="pill-dot"></span>Tersedia</span>';
+
+      html += '<div class="card produk-mobile-card">'+
+        '<div style="display:flex;align-items:center;gap:11px;">'+
+        productThumbHTML(p, 42)+
+        '<div style="flex:1;min-width:0;">'+
+        '<div style="font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(p.name)+'</div>'+
+        '<div style="font-family:JetBrains Mono,monospace;font-weight:600;font-size:13px;color:var(--ink);margin-top:2px;">'+fmtRp(p.price)+'</div>'+
+        '</div>'+
+        (canEdit ? '<div style="display:flex;gap:4px;flex-shrink:0;">'+
+        '<button data-edit-produk="'+p.id+'" style="border:1px solid var(--border);background:#fff;border-radius:9px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--muted);">'+ICONS.edit(15)+'</button>'+
+        '<button data-delete-produk="'+p.id+'" style="border:1px solid var(--border);background:#fff;border-radius:9px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;color:var(--red);">'+ICONS.trash(15)+'</button></div>' : '')+
+        '</div>'+
+        '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">'+
+        '<span class="pill pill-neutral">'+esc(categoryName(p.category_id))+'</span>'+
+        ((p.tax_percent||0)>0 ? '<span class="pill pill-neutral">PPN '+p.tax_percent+'%</span>' : '')+
+        statusPill2+
+        '<span style="font-size:12px;color:var(--muted);margin-left:auto;">Stok: '+stok2+'</span>'+
+        '</div></div>';
+    });
+  }
+  html += '</div>';
+
   html += renderProductModal();
   return html;
 }
