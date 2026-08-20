@@ -309,7 +309,17 @@
     .more-sheet .nav-item.is-soon{opacity:.55; cursor:default;}
   }
 </style>
+<!--
+  Midtrans Snap.js — mode SANDBOX (untuk uji coba).
+  Setelah akun Midtrans production kamu aktif, ganti:
+  1. URL: https://app.sandbox.midtrans.com/snap/snap.js  ->  https://app.midtrans.com/snap/snap.js
+  2. data-client-key: isi dengan Client Key ASLI dari dashboard Midtrans (Settings > Access Keys)
+  Sebelum itu, window.snap akan undefined / tidak berfungsi — aplikasi otomatis menampilkan
+  opsi aktivasi manual (WhatsApp) sebagai fallback, jadi aman dibiarkan seperti ini.
+-->
+<script src="https://app.sandbox.midtrans.com/snap/snap.js" data-client-key="SB-Mid-client-GANTI_DENGAN_CLIENT_KEY_ANDA"></script>
 </head>
+
 <body>
 <div id="root"></div>
 
@@ -322,6 +332,12 @@
 var SUPABASE_URL = "https://dmtyawzzlbokkmizxyvs.supabase.co";
 var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRtdHlhd3p6bGJva2ttaXp4eXZzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2MDc5ODMsImV4cCI6MjEwMjE4Mzk4M30.ibGv-i8yjBYJvobrhW6DYui8fC1b7e5J9efnKIApXYU";
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ---------- Konfigurasi Langganan / Payment ---------- */
+// Ganti nomor WA admin di bawah ini dengan nomor asli (format 62xxxxxxxxxx tanpa +/spasi/strip).
+var ADMIN_WA_NUMBER = "6281234567890";
+var SUBSCRIPTION_PRICE = 49000;
+var SUBSCRIPTION_PRICE_LABEL = "Rp49.000/bulan";
 
 /* ---------- Icons (plain SVG strings) ---------- */
 function svgIcon(inner, size){
@@ -350,7 +366,10 @@ var ICONS = {
   edit: function(s){ return svgIcon('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>', s); },
   logout: function(s){ return svgIcon('<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>', s); },
   history: function(s){ return svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>', s); },
-  more: function(s){ return svgIcon('<circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>', s); }
+  more: function(s){ return svgIcon('<circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/>', s); },
+  card: function(s){ return svgIcon('<rect x="2" y="5" width="20" height="14" rx="2.5"/><path d="M2 10h20"/><path d="M6 15h4"/>', s); },
+  whatsapp: function(s){ return svgIcon('<path d="M20.5 3.5a10.4 10.4 0 00-17.8 10L2 21l7.7-1.9a10.4 10.4 0 0010.8-15.6z"/><path d="M8.3 8.4c.2-.5.5-.5.8-.5h.6c.2 0 .5 0 .7.5.3.6 1 2 1 2.1.1.2.1.4 0 .6-.2.4-.3.5-.5.8-.2.2-.4.4-.2.8.3.5 1.2 1.9 2.6 2.6.6.3.9.2 1.2 0 .3-.3.7-.9 1-1.2.2-.3.4-.2.7-.1.3.1 1.9.9 2.2 1 .3.2.5.2.6.4.1.2.1 1-.3 1.8-.4.9-2 1.6-2.8 1.7-.7.1-1.5.2-4.8-1.2-4-1.7-6.5-5.7-6.7-6-.2-.3-1.5-2-1.5-3.9 0-1.8 1-2.7 1.3-3.1z"/>', s); },
+  clock: function(s){ return svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>', s); }
 };
 
 /* ---------- Static reference data ---------- */
@@ -635,7 +654,9 @@ var state = {
   busy: false,
   sidebarPinned: false,
   moreSheetOpen: false,
-  _focusSearch: false
+  _focusSearch: false,
+  payment: { busy:false, error:null, info:null },
+  trialExpiredShowPayment: false
 };
 
 var root = document.getElementById("root");
@@ -911,7 +932,8 @@ var META = {
   meja: {title:"Manajemen Meja", sub:"Pantau status seluruh meja secara real-time"},
   produk: {title:"Produk", sub:"Kelola katalog dan stok produk"},
   laporan: {title:"Laporan", sub:"Laporan penjualan harian & bulanan — cetak atau unduh PDF"},
-  pengaturan: {title:"Pengaturan", sub:"Koneksi printer & preferensi outlet"}
+  pengaturan: {title:"Pengaturan", sub:"Koneksi printer & preferensi outlet"},
+  berlangganan: {title:"Berlangganan", sub:"Kelola paket langganan outlet kamu"}
 };
 
 function trialBadge(){
@@ -919,7 +941,175 @@ function trialBadge(){
   var msLeft = new Date(state.outlet.trial_ends_at).getTime() - Date.now();
   var daysLeft = Math.max(0, Math.ceil(msLeft/(1000*60*60*24)));
   var urgent = daysLeft <= 3;
-  return '<div class="pill" style="background:'+(urgent?"var(--bad-bg)":"var(--warn-bg)")+';color:'+(urgent?"var(--red)":"var(--warn)")+';font-weight:700;">Trial: '+daysLeft+' hari lagi</div>';
+  var label = daysLeft<=0 ? "Trial berakhir hari ini" : "Trial: "+daysLeft+" hari lagi";
+  return '<div class="pill" style="background:'+(urgent?"var(--bad-bg)":"var(--warn-bg)")+';color:'+(urgent?"var(--red)":"var(--warn)")+';font-weight:700;">'+label+'</div>';
+}
+
+function subscribeTopbarBtn(){
+  if(!state.outlet || state.outlet.subscription_status !== "trial" || !isOwner()) return "";
+  var msLeft = new Date(state.outlet.trial_ends_at).getTime() - Date.now();
+  var daysLeft = Math.max(0, Math.ceil(msLeft/(1000*60*60*24)));
+  var urgent = daysLeft <= 3;
+  return '<button class="btn '+(urgent?"btn-primary":"btn-outline")+'" data-open-berlangganan style="padding:8px 13px;">'+ICONS.card(14)+'Berlangganan</button>';
+}
+
+/* ---------- Langganan / Payment (Midtrans) ---------- */
+function getSubscriptionEndDate(){
+  if(!state.outlet) return null;
+  return state.outlet.subscription_expires_at || state.outlet.trial_ends_at || null;
+}
+
+function subscriptionStatusMeta(){
+  var status = state.outlet ? state.outlet.subscription_status : null;
+  if(status === "active") return { label:"Aktif", cls:"pill-good" };
+  if(status === "trial") return { label:"Masa Trial", cls:"pill-warn" };
+  if(status === "expired") return { label:"Kadaluarsa", cls:"pill-bad" };
+  if(status === "canceled") return { label:"Dibatalkan", cls:"pill-bad" };
+  return { label:status || "-", cls:"pill-neutral" };
+}
+
+function waManualPaymentUrl(){
+  var outletName = (state.outlet && state.outlet.name) || "outlet saya";
+  var msg = "Halo, saya ingin melanjutkan berlangganan Posivo untuk outlet \""+outletName+"\". Mohon info aktivasi manual.";
+  return "https://wa.me/"+ADMIN_WA_NUMBER+"?text="+encodeURIComponent(msg);
+}
+
+async function refreshOutletSubscription(){
+  if(!state.profile) return;
+  var { data } = await sb.from("outlets").select("*").eq("id", state.profile.outlet_id).maybeSingle();
+  if(data){
+    state.outlet = data;
+    if(state.stage==="trial-expired" && data.subscription_status!=="expired" && data.subscription_status!=="canceled"){
+      var trialEnd = data.trial_ends_at ? new Date(data.trial_ends_at) : null;
+      var stillTrialExpired = data.subscription_status==="trial" && trialEnd && trialEnd.getTime() < Date.now();
+      if(!stillTrialExpired){ state.stage = "ready"; state.trialExpiredShowPayment = false; }
+    }
+    renderApp();
+  }
+}
+
+/* Panggil Edge Function untuk membuat transaksi Midtrans (Snap).
+   Selama akun Midtrans belum aktif / secret MIDTRANS_SERVER_KEY belum di-set,
+   Edge Function akan membalas error yang informatif dan UI otomatis menampilkan opsi manual di bawah. */
+async function startMidtransPayment(){
+  if(!isOwner() || state.payment.busy) return;
+  var pay = state.payment;
+  pay.busy = true; pay.error = null; pay.info = null; renderApp();
+
+  try{
+    var { data, error } = await sb.functions.invoke("create-midtrans-transaction", {
+      body: { outlet_id: state.profile.outlet_id }
+    });
+    if(error) throw error;
+    if(data && data.error) throw new Error(data.error);
+    if(!data || !data.snapToken) throw new Error("Token pembayaran tidak diterima dari server.");
+
+    pay.busy = false; renderApp();
+
+    if(!window.snap || typeof window.snap.pay !== "function"){
+      pay.error = "Modul pembayaran Midtrans belum termuat. Silakan pakai opsi aktivasi manual di bawah untuk sementara.";
+      renderApp();
+      return;
+    }
+
+    window.snap.pay(data.snapToken, {
+      onSuccess: function(){ handlePaymentResult("success"); },
+      onPending: function(){ handlePaymentResult("pending"); },
+      onError: function(){ state.payment.error = "Pembayaran gagal diproses. Silakan coba lagi atau pakai opsi manual di bawah."; renderApp(); },
+      onClose: function(){ /* popup ditutup user tanpa menyelesaikan pembayaran */ }
+    });
+  }catch(err){
+    pay.busy = false;
+    pay.error = (err && err.message) ? err.message : "Pembayaran online belum aktif saat ini. Silakan pakai opsi aktivasi manual di bawah.";
+    renderApp();
+  }
+}
+
+function handlePaymentResult(status){
+  state.payment.info = status==="success"
+    ? "Pembayaran berhasil! Langganan kamu sedang diperbarui, mohon tunggu sebentar..."
+    : "Pembayaran sedang diproses. Status akan diperbarui otomatis setelah dikonfirmasi.";
+  renderApp();
+  setTimeout(refreshOutletSubscription, 4000);
+}
+
+/* Kartu inti halaman langganan — dipakai baik di halaman penuh "Berlangganan"
+   maupun di layar blokir saat trial sudah habis. */
+function renderSubscriptionCard(opts){
+  opts = opts || {};
+  var pay = state.payment;
+  var sMeta = subscriptionStatusMeta();
+  var endDate = getSubscriptionEndDate();
+  var endLabel = endDate ? new Date(endDate).toLocaleDateString("id-ID", {day:"numeric", month:"long", year:"numeric"}) : "-";
+
+  var html = '<div class="card" style="padding:'+(opts.compact?"26px":"24px 26px")+';max-width:'+(opts.compact?"420px":"520px")+';'+(opts.compact?"margin:0 auto;":"")+'">';
+
+  if(!opts.compact){
+    html += '<div style="width:48px;height:48px;border-radius:13px;background:var(--grad);display:flex;align-items:center;justify-content:center;margin-bottom:14px;">'+ICONS.card(22)+'</div>';
+  }
+
+  html += '<div class="row-between" style="margin-bottom:4px;align-items:flex-start;">'+
+    '<div class="section-title" style="font-size:16px;">Paket Posivo Bulanan</div>'+
+    '<span class="pill '+sMeta.cls+'"><span class="pill-dot"></span>'+esc(sMeta.label)+'</span>'+
+    '</div>';
+  html += '<div style="font-family:JetBrains Mono,monospace;font-weight:700;font-size:22px;margin:6px 0 2px;">'+SUBSCRIPTION_PRICE_LABEL+'</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">'+
+    (state.outlet && state.outlet.subscription_status==="trial" ? "Trial berakhir " : "Aktif sampai ")+'<b style="color:var(--ink);">'+endLabel+'</b></div>';
+
+  html += '<ul style="margin:0 0 18px;padding-left:18px;font-size:12.5px;color:var(--ink-soft);line-height:1.9;">'+
+    '<li>Transaksi kasir & cetak nota tanpa batas</li>'+
+    '<li>Laporan penjualan harian & bulanan</li>'+
+    '<li>Manajemen produk, meja, dan akun kasir</li>'+
+    '<li>AI-ready dashboard &amp; dukungan prioritas</li>'+
+    '</ul>';
+
+  if(pay.error){ html += '<div style="background:var(--bad-bg);color:var(--red);font-size:12px;padding:9px 11px;border-radius:8px;margin-bottom:12px;">'+esc(pay.error)+'</div>'; }
+  if(pay.info){ html += '<div style="background:var(--good-bg);color:var(--good);font-size:12px;padding:9px 11px;border-radius:8px;margin-bottom:12px;">'+esc(pay.info)+'</div>'; }
+
+  html += '<button class="btn btn-primary" data-pay-midtrans style="width:100%;justify-content:center;padding:11px;margin-bottom:10px;" '+(pay.busy?"disabled":"")+'>'+
+    (pay.busy?"Memproses...":ICONS.card(14)+"Bayar dengan Midtrans")+'</button>';
+
+  html += '<div style="background:#FFF6E9;border:1px solid #F3D9A8;border-radius:10px;padding:12px 14px;font-size:12px;color:#7A5A12;margin-bottom:'+(opts.showBack?"12px":"0")+';">'+
+    '<b>Pembayaran online sedang kami siapkan.</b> Sementara ini kamu bisa aktivasi manual: transfer '+SUBSCRIPTION_PRICE_LABEL+' lalu konfirmasi ke admin, aktif dalam 1x24 jam.'+
+    '<a href="'+waManualPaymentUrl()+'" target="_blank" rel="noopener" class="btn btn-outline" style="margin-top:10px;width:100%;justify-content:center;background:#fff;">'+ICONS.whatsapp(14)+'Hubungi Admin via WhatsApp</a>'+
+    '</div>';
+
+  if(opts.showBack){
+    html += '<button class="btn btn-outline" data-back-berlangganan style="width:100%;justify-content:center;">Kembali</button>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/* Ringkasan singkat untuk kartu di halaman Pengaturan, dengan tombol menuju halaman Berlangganan penuh. */
+function renderSubscriptionSummaryCard(){
+  var sMeta = subscriptionStatusMeta();
+  var endDate = getSubscriptionEndDate();
+  var endLabel = endDate ? new Date(endDate).toLocaleDateString("id-ID", {day:"numeric", month:"long", year:"numeric"}) : "-";
+  var isTrial = state.outlet && state.outlet.subscription_status === "trial";
+
+  var html = '<div class="card" style="padding:22px;max-width:520px;margin-bottom:20px;">';
+  html += '<div class="row-between" style="margin-bottom:4px;align-items:flex-start;">'+
+    '<div class="section-title" style="margin-bottom:4px;">Langganan</div>'+
+    '<span class="pill '+sMeta.cls+'"><span class="pill-dot"></span>'+esc(sMeta.label)+'</span>'+
+    '</div>';
+  html += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">Paket Posivo Bulanan &middot; '+SUBSCRIPTION_PRICE_LABEL+'</div>';
+  html += '<div class="row-between" style="background:#F6F3EF;border-radius:10px;padding:11px 14px;margin-bottom:16px;">'+
+    '<div style="font-size:12px;color:var(--muted);">'+(isTrial?"Trial berakhir":"Berlaku sampai")+'</div>'+
+    '<div style="font-size:13px;font-weight:700;">'+endLabel+'</div>'+
+    '</div>';
+  html += '<button class="btn btn-primary" data-open-berlangganan>'+ICONS.card(14)+(isTrial?"Berlangganan Sekarang":"Kelola Langganan")+'</button>';
+  html += '</div>';
+  return html;
+}
+
+function renderBerlangganan(){
+  if(!isOwner()){
+    return '<div class="card" style="padding:40px;text-align:center;color:var(--muted);max-width:480px;">'+
+      'Halaman ini hanya bisa diakses oleh Owner outlet.</div>';
+  }
+  return renderSubscriptionCard({ compact:false, showBack:true });
 }
 
 function renderTopbar(){
@@ -929,7 +1119,7 @@ function renderTopbar(){
   var timeStr = now.toLocaleTimeString("id-ID", {hour:"2-digit", minute:"2-digit"});
   var rightBtn = state.view==="produk" ? '<button class="btn btn-dark">'+ICONS.plus(14)+"Ekspor"+'</button>' : "";
   return '<div class="topbar"><div><div class="page-title">'+m.title+'</div><div class="page-sub">'+m.sub+'</div></div>'+
-    '<div class="topbar-right">'+trialBadge()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
+    '<div class="topbar-right">'+trialBadge()+subscribeTopbarBtn()+rightBtn+'<div class="badge-time">'+dateStr+' &middot; '+timeStr+'</div></div></div>';
 }
 
 /* ---------- Dashboard ---------- */
@@ -2517,6 +2707,7 @@ function renderPengaturan(){
   var re = state.receiptEditor;
 
   var html = renderProfilCard();
+  if(isOwner()){ html += renderSubscriptionSummaryCard(); }
   if(isOwner()){ html += renderKasirManagerCard(); }
 
   var statusPill = p.connected
@@ -2607,18 +2798,25 @@ function renderApp(){
     return;
   }
   if(state.stage==="trial-expired"){
-    root.innerHTML = '<div style="height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;">'+
-      '<div class="card" style="max-width:420px;padding:30px;text-align:center;">'+
-      '<div style="width:52px;height:52px;border-radius:14px;background:var(--grad);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">'+ICONS.table(24)+'</div>'+
-      '<div class="section-title" style="margin-bottom:8px;font-size:17px;">Masa trial kamu sudah berakhir</div>'+
-      '<div style="font-size:13px;color:var(--muted);margin-bottom:20px;">Trial 14 hari untuk <b style="color:var(--ink);">'+esc((state.outlet&&state.outlet.name)||"outlet kamu")+'</b> sudah habis. Lanjutkan berlangganan Rp49.000/bulan untuk terus pakai Posivo.</div>'+
-      '<button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px;margin-bottom:10px;" onclick="alert(\'Halaman pembayaran langganan segera hadir. Hubungi kami untuk aktivasi manual sementara.\')">Berlangganan Sekarang</button>'+
-      '<button class="btn btn-outline" data-logout style="width:100%;justify-content:center;">Keluar</button></div></div>';
+    var innerHtml;
+    if(state.trialExpiredShowPayment){
+      innerHtml = renderSubscriptionCard({ compact:true, showBack:true });
+    } else {
+      innerHtml = '<div class="card" style="max-width:420px;padding:30px;text-align:center;margin:0 auto;">'+
+        '<div style="width:52px;height:52px;border-radius:14px;background:var(--grad);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">'+ICONS.clock(24)+'</div>'+
+        '<div class="section-title" style="margin-bottom:8px;font-size:17px;">Masa Trial Anda Sudah Habis</div>'+
+        '<div style="font-size:13px;color:var(--muted);margin-bottom:20px;">Trial 14 hari untuk <b style="color:var(--ink);">'+esc((state.outlet&&state.outlet.name)||"outlet kamu")+'</b> sudah berakhir. Untuk melanjutkan menggunakan Posivo tanpa gangguan, silakan klik Berlangganan di bawah ini.</div>'+
+        (isOwner()
+          ? '<button class="btn btn-primary" data-open-berlangganan style="width:100%;justify-content:center;padding:11px;margin-bottom:10px;">'+ICONS.card(14)+'Berlangganan Sekarang</button>'
+          : '<div style="background:var(--warn-bg);color:var(--warn);font-size:12px;padding:9px 11px;border-radius:8px;margin-bottom:10px;">Hubungi pemilik outlet untuk melanjutkan langganan.</div>')+
+        '<button class="btn btn-outline" data-logout style="width:100%;justify-content:center;">Keluar</button></div>';
+    }
+    root.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;">'+innerHtml+'</div>';
     return;
   }
 
   var content;
-  if(isKasir() && state.view==="pengaturan"){ state.view = "dashboard"; }
+  if(isKasir() && (state.view==="pengaturan" || state.view==="berlangganan")){ state.view = "dashboard"; }
   if(state.view==="dashboard") content = renderDashboard();
   else if(state.view==="kasir") content = renderKasir();
   else if(state.view==="riwayat") content = renderRiwayat();
@@ -2626,6 +2824,7 @@ function renderApp(){
   else if(state.view==="produk") content = renderProduk();
   else if(state.view==="laporan") content = renderLaporan();
   else if(state.view==="pengaturan") content = renderPengaturan();
+  else if(state.view==="berlangganan") content = renderBerlangganan();
   else content = renderDashboard();
 
   root.innerHTML = '<div class="app-shell">'+renderSidebar()+
@@ -2682,6 +2881,27 @@ root.addEventListener("click", function(e){
 
   var logoutBtn = e.target.closest("[data-logout]");
   if(logoutBtn){ sb.auth.signOut(); return; }
+
+  var openBerlanggananBtn = e.target.closest("[data-open-berlangganan]");
+  if(openBerlanggananBtn){
+    state.payment.error = null; state.payment.info = null;
+    if(state.stage==="trial-expired"){ state.trialExpiredShowPayment = true; }
+    else { state.view = "berlangganan"; }
+    renderApp();
+    return;
+  }
+
+  var backBerlanggananBtn = e.target.closest("[data-back-berlangganan]");
+  if(backBerlanggananBtn){
+    state.payment.error = null; state.payment.info = null;
+    if(state.stage==="trial-expired"){ state.trialExpiredShowPayment = false; }
+    else { state.view = "dashboard"; }
+    renderApp();
+    return;
+  }
+
+  var payMidtransBtn = e.target.closest("[data-pay-midtrans]");
+  if(payMidtransBtn && !payMidtransBtn.disabled){ startMidtransPayment(); return; }
 
   var retryBtn = e.target.closest("[data-retry]");
   if(retryBtn){ loadData(); return; }
